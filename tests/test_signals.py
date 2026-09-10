@@ -2,7 +2,7 @@
 
 import pytest
 
-from sleeper_mcp.signals import _pct_within
+from sleeper_mcp.optimizer import percentile_within as _pct_within
 
 
 def test_percentile_is_scale_free():

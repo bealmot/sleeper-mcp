@@ -101,3 +101,31 @@ def holes(pool: list[dict], slots: list[str]) -> list[str]:
     """Slots that cannot be filled at all from this pool."""
     _, assign = best_lineup(pool, slots)
     return [slots[i] for i, a in enumerate(assign) if a is None]
+
+
+def percentile_within(values: dict[str, float]) -> dict[str, float]:
+    """Value -> percentile rank (0-100) within this group. Ties share a rank.
+
+    Used to make two incomparable scales comparable. A projection in points and
+    a conviction count cannot be subtracted, and a quarterback's 22 points are
+    not a tight end's 22 — but "where does he sit among quarterbacks according
+    to each source" is one question both can answer.
+
+    Lives here rather than beside the tools that use it so it can be tested
+    without the MCP framework installed.
+    """
+    if not values:
+        return {}
+    ordered = sorted(values.items(), key=lambda kv: kv[1])
+    n = len(ordered)
+    out: dict[str, float] = {}
+    i = 0
+    while i < n:
+        j = i
+        while j + 1 < n and ordered[j + 1][1] == ordered[i][1]:
+            j += 1
+        pct = 100.0 * (i + j) / 2 / max(n - 1, 1)
+        for k in range(i, j + 1):
+            out[ordered[k][0]] = round(pct, 1)
+        i = j + 1
+    return out

@@ -55,6 +55,7 @@ import os
 
 from .client import (current_week, gql, league, league_id, mcp, players, rest,
                      roster_id, scored)
+from .optimizer import percentile_within as _pct_within
 
 SIGNAL_FILE = (os.environ.get("SLEEPER_SIGNAL_FILE") or "").strip()
 
@@ -92,24 +93,6 @@ def load() -> tuple[dict, str]:
     if d.get("generated"):
         label += f", generated {d['generated']}"
     return rows, label
-
-
-def _pct_within(values: dict[str, float]) -> dict[str, float]:
-    """Value -> percentile rank (0-100) within this group. Ties share a rank."""
-    if not values:
-        return {}
-    ordered = sorted(values.items(), key=lambda kv: kv[1])
-    n = len(ordered)
-    out, i = {}, 0
-    while i < n:
-        j = i
-        while j + 1 < n and ordered[j + 1][1] == ordered[i][1]:
-            j += 1
-        pct = 100.0 * (i + j) / 2 / max(n - 1, 1)
-        for k in range(i, j + 1):
-            out[ordered[k][0]] = round(pct, 1)
-        i = j + 1
-    return out
 
 
 @mcp.tool()
