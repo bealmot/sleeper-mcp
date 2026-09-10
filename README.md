@@ -86,6 +86,8 @@ executes immediately with no veto window.
 `player_news` · `player_outlook` · `trending` · `draft_picks` · `chat` ·
 `watched_players` · `pickem_status` · `league_info` · `find_my_leagues`
 
+**Analysis** — `waiver_targets` · `bye_outlook`
+
 **Writes** — `set_lineup` · `waiver_claim` · `cancel_claim` · `set_ir` ·
 `trade_block` · `propose_trade` · `respond_trade` · `pickem_pick` ·
 `watch_player`
@@ -102,6 +104,14 @@ A few worth calling out:
 - **`league_info`** surfaces the settings that silently change what everything
   else means: waiver type, trade review days, and whether your league pays for
   receptions or first downs.
+- **`waiver_targets`** prices free agents by what they add to *your starting
+  lineup* — `best_lineup(roster + him) − best_lineup(roster)` — not by
+  projection or generic value over replacement. A high-projection player at a
+  position you are already deep in correctly prices at zero. "Nothing improves
+  your lineup this week" is a real answer and it will give it.
+- **`bye_outlook`** shows which upcoming weeks you cannot field a *legal*
+  lineup and which slot goes empty, so a bye-week hole surfaces in September
+  rather than on the Sunday it bites.
 
 ## What this deliberately does NOT do
 
