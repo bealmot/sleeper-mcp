@@ -92,6 +92,10 @@ executes immediately with no veto window.
 `trade_block` · `propose_trade` · `respond_trade` · `pickem_pick` ·
 `watch_player`
 
+**Optional, bring your own data** — `signal_divergence` · `player_signal` ·
+`trade_targets`. Inert unless you point `SLEEPER_SIGNAL_FILE` at a JSON file of
+your own rankings or scores. See [EXTENDING.md](EXTENDING.md).
+
 A few worth calling out:
 
 - **`roster`** scores your players against *your league's* `scoring_settings`,
@@ -112,6 +116,23 @@ A few worth calling out:
 - **`bye_outlook`** shows which upcoming weeks you cannot field a *legal*
   lineup and which slot goes empty, so a bye-week hole surfaces in September
   rather than on the Sunday it bites.
+
+## Extending it
+
+The core stays Sleeper-only: no rankings, no projections of its own, no
+opinions about who to start. Mixing "what Sleeper says" with "what somebody
+thinks" makes it impossible to tell which is which.
+
+Your own data plugs in two ways, and [EXTENDING.md](EXTENDING.md) covers both:
+
+- **A signal file** — any per-player scores you can export, keyed by Sleeper
+  player id. Three tools switch on and compare it against Sleeper's own
+  numbers and against what your league-mates are actually starting. Works with
+  a subscription's ratings, a scraped consensus, a spreadsheet or your own
+  model; units do not matter because scores are compared as percentiles within
+  position.
+- **Your own tools** — every tool here is a plain async function with a
+  decorator, and `client.py` and `optimizer.py` expose the useful helpers.
 
 ## What this deliberately does NOT do
 

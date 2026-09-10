@@ -8,6 +8,7 @@ from .client import mcp
 from . import discovery as _discovery  # noqa: F401
 from . import lineups as _lineups      # noqa: F401
 from . import reads as _reads          # noqa: F401
+from . import signals as _signals      # noqa: F401  (inert without a file)
 from . import writes as _writes        # noqa: F401
 
 
