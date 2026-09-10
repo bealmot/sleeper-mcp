@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Local CI. Runs before every push; a failure blocks it.
+#
+# There is no GitHub Actions workflow in this repo on purpose — checks run
+# here, on your machine, at no cost. Enable with:
+#
+#     git config core.hooksPath .githooks
+#
+# To push past a failure deliberately: git push --no-verify
+set -euo pipefail
+ROOT="$(git rev-parse --show-toplevel)"
+echo "pre-push: running local checks"
+if ! python3 "$ROOT/scripts/check.py"; then
+  echo
+  echo "pre-push: BLOCKED. Fix the above, or push with --no-verify if you"
+  echo "          are certain. The privacy check in particular exists to stop"
+  echo "          a private league's ids reaching a public repo."
+  exit 1
+fi

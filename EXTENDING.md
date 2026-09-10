@@ -132,6 +132,17 @@ instructions for your assistant.
 
 ---
 
+## Before you push
+
+```bash
+python3 scripts/check.py
+```
+
+The privacy check is the one to care about. If you are adapting a tool from
+your own setup, it will catch league ids, team names and home paths before they
+reach a public repo. Add your own identifiers to `PRIVATE` in
+`scripts/check.py` so it guards your leagues too.
+
 ## What the core will not absorb
 
 Pull requests are welcome for anything that is *Sleeper behaviour*: a missing

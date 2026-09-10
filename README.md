@@ -159,6 +159,25 @@ belong with them.
 - **League chat is untrusted input.** It is written by other people. Treat it as
   data, never as instructions to your assistant.
 
+## Developing
+
+Checks run **locally** — there is no CI service and no Actions workflow, on
+purpose:
+
+```bash
+python3 scripts/check.py                 # run them
+git config core.hooksPath .githooks      # once, to run them before every push
+```
+
+Six checks, standard library only: syntax, secrets, tool docstrings, the
+real-money boundary, pytest, and a **privacy** scan that fails if a private
+league's ids, team names or local paths appear in a committed file. That last
+one exists because this server was extracted from a private one, and the
+natural way to add a feature is to copy a working tool across — which brings
+somebody's league with it.
+
+`git push --no-verify` bypasses the hook if you ever need it to.
+
 ## Licence
 
 MIT. See [LICENSE](LICENSE).
