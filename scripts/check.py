@@ -243,13 +243,54 @@ def check_fresh_install() -> bool:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def _test_python() -> str:
+    """The interpreter to run tests with.
+
+    Prefers the project venv. The hook runs check.py under whatever `python3`
+    is on PATH, and that interpreter does not have this package's dependencies
+    — so every test module importing client was skipped at COLLECTION and the
+    gate reported green over them. See check_tests.
+    """
+    venv = ROOT / ".venv" / "bin" / "python"
+    return str(venv) if venv.exists() else sys.executable
+
+
 def check_tests() -> bool:
-    r = subprocess.run([sys.executable, "-m", "pytest", "-q",
-                        str(ROOT / "tests")],
+    """Run the suite, and REFUSE TO PASS OVER TESTS THAT DID NOT RUN.
+
+    A skipped module is not a neutral event here. tests/test_webauth.py covers
+    a local listener that receives a bearer token; it needs httpx, and without
+    it pytest skips the module and the summary still says "passed". The gate
+    was running 114 of 142 tests and printing a confident green over the
+    difference — the same shape as every other defect this project has hit:
+    a check that reports success while silently not checking.
+    """
+    py = _test_python()
+    r = subprocess.run([py, "-m", "pytest", "-q", "-rs", str(ROOT / "tests")],
                        capture_output=True, text=True, cwd=ROOT)
-    last = [l for l in r.stdout.strip().splitlines() if l.strip()][-1:] or [""]
-    return ok(f"tests — {last[0].strip()}") if r.returncode == 0 else \
-        fail("tests", r.stdout.strip().splitlines()[-15:])
+    lines = [l for l in r.stdout.strip().splitlines() if l.strip()]
+    last = lines[-1].strip() if lines else ""
+    if r.returncode != 0:
+        return fail("tests", lines[-15:])
+
+    # "SKIPPED [1] tests/test_webauth.py:14: could not import 'httpx'"
+    missing = sorted({m.group(1) for m in
+                      (re.match(r"SKIPPED \[\d+\] ([^:]+):", l) for l in lines)
+                      if m})
+    if missing:
+        return fail("tests", [
+            f"{last}  — but these modules never ran:",
+            *(f"    {m}" for m in missing),
+            "",
+            "  They are skipped because this interpreter lacks the package's",
+            f"  dependencies ({py}).",
+            "  A gate that skips its own security tests and prints green is",
+            "  worse than no gate. Create the project venv once:",
+            "",
+            "    uv venv && uv pip install -e . pytest",
+        ])
+    where = "" if py == sys.executable else f"  [{pathlib.Path(py).parent.parent.name}]"
+    return ok(f"tests — {last}{where}")
 
 
 def main() -> int:

@@ -140,14 +140,14 @@ executes immediately with no veto window.
 
 **Reads** — `roster` · `matchup` · `standings` · `transactions` · `pending` ·
 `player_news` · `player_outlook` · `trending` · `draft_picks` · `chat` ·
-`watched_players` · `pickem_status` · `league_info` · `find_my_leagues` · `player_history` ·
+`watched_players` · `pickem_status` · `league_info` · `find_my_leagues` · `player_history` · `keepers` ·
 `auth_status` · `setup_token`
 
 **Analysis** — `waiver_targets` · `bye_outlook` · `playoff_odds` · `matchup_odds` · `schedule_strength` · `playoff_bracket` · `usage` · `breakouts`
 
 **Writes** — `set_lineup` · `waiver_claim` · `cancel_claim` · `set_ir` ·
 `trade_block` · `propose_trade` · `respond_trade` · `pickem_pick` ·
-`watch_player`
+`watch_player` · `set_keepers`
 
 **Optional, bring your own data** — `signal_divergence` · `player_signal` ·
 `trade_targets`. Inert unless you point `SLEEPER_SIGNAL_FILE` at a JSON file of
@@ -179,6 +179,12 @@ A few worth calling out:
   of their team's targets and carries, which is how a back who went from 40% of
   snaps to 75% surfaces while he is still available, rather than after the
   projections catch up and someone else claims him.
+- **`keepers`** separates two things Sleeper gives the same name. The draft's
+  `is_keeper` picks are the record of who was actually kept, and the round they
+  cost; `roster.keepers` is a forward designation for the next draft. In a live
+  league those lists named entirely different players, so reporting either one
+  as "the keepers" is wrong about the other half the time. It shows both, with
+  the history back through every season the league has existed.
 - **`player_history`** shows every time your league has added, dropped or
   traded one player, and it follows the league's `previous_league_id` chain, so
   a keeper league returns years of it. This is how you tell a free agent who is

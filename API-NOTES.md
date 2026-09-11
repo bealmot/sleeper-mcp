@@ -117,6 +117,30 @@ on the bench because he occupies the IR slot. Not a bug.
 Sleeper only renders lineup controls on the `/team` route — you cannot swap a
 player from `/matchup` by hand. The API does not care.
 
+## Keepers: two fields, different answers
+
+`roster.keepers` and the draft's `is_keeper` picks are NOT the same thing, and
+they disagree — which makes either one, read as "the keepers", confidently
+wrong about the other.
+
+In the league this was developed against, the 2026 draft carried **eight**
+`is_keeper` picks — McCaffrey r1p5, Gibbs r1p9, Nacua r2p13, Lamar Jackson
+r2p17 — while `roster.keepers` held **two** entirely different players. Same
+mismatch in 2025.
+
+**The draft is the record.** `GET /draft/{draft_id}/picks`, filter `is_keeper`.
+It also gives the round and pick the keeper cost, which is the part that
+decides whether keeping someone was a good idea.
+
+**`roster.keepers` is a forward designation** for the next draft. Managers
+carry entries in it mid-season, so it is plainly not inert outside the
+pre-draft window — but nothing observed here establishes how it is consumed at
+the next draft. Do not assert a mechanism for it.
+
+`roster_set_keepers(keepers: String, ...)` takes a JSON ARRAY AS A STRING —
+`"[\"11584\"]"` — while the roster hands it back as a real list. Passing a
+list to the mutation is accepted and stores nothing.
+
 ## `league_transactions_by_player`
 
 Authenticated, unlike most league reads — it returns `Unauthorized` without a
