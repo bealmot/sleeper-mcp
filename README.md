@@ -40,6 +40,32 @@ Then add it to your MCP client. For Claude Desktop, in `claude_desktop_config.js
 }
 ```
 
+## Zero-config setup
+
+```bash
+sleeper-mcp setup
+```
+
+It asks for the token with hidden input, **checks it against Sleeper before
+saving anything**, looks up your leagues and roster ids, and writes
+`~/.config/sleeper-mcp/config.json` with 0600 permissions. After that the
+client config is just:
+
+```json
+{ "mcpServers": { "sleeper": { "command": "sleeper-mcp" } } }
+```
+
+Environment variables still win over the file if you set them. This exists
+because environment delivery is how this server most often fails in the field,
+silently: some MCP clients pass `${SLEEPER_TOKEN}` through unexpanded, and a
+shell rc that returns early for non-interactive sessions never exports
+anything to a server launched by a desktop app. Sleeper answers both with a
+bare 401.
+
+When something is off, `sleeper-mcp status` (or the `auth_status` tool from
+inside your assistant) says where each setting came from, what is wrong with
+the token's shape, and whether Sleeper accepts it — without printing it.
+
 ## Finding your ids
 
 You do not need them to start. Ask your assistant to run:
@@ -61,6 +87,9 @@ each league's starting slots. It needs no credentials — all of it is public.
 | `SLEEPER_PICKEM_ROSTER` | pick'em only | your entry in that lobby |
 | `SLEEPER_TOKEN` | **writes only** | see below |
 | `SLEEPER_ENABLE_WRITES` | **writes only** | must be exactly `1` |
+
+Each of these is read from the environment first, then from the config file
+that `sleeper-mcp setup` writes (`SLEEPER_MCP_CONFIG` overrides its location).
 
 **Reads need no token at all.** Rosters, matchups, news, standings, trending
 players and transactions all work with nothing configured but a league id.
@@ -84,7 +113,8 @@ executes immediately with no veto window.
 
 **Reads** — `roster` · `matchup` · `standings` · `transactions` · `pending` ·
 `player_news` · `player_outlook` · `trending` · `draft_picks` · `chat` ·
-`watched_players` · `pickem_status` · `league_info` · `find_my_leagues`
+`watched_players` · `pickem_status` · `league_info` · `find_my_leagues` ·
+`auth_status`
 
 **Analysis** — `waiver_targets` · `bye_outlook`
 
