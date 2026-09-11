@@ -143,7 +143,7 @@ executes immediately with no veto window.
 `watched_players` · `pickem_status` · `league_info` · `find_my_leagues` ·
 `auth_status` · `setup_token`
 
-**Analysis** — `waiver_targets` · `bye_outlook` · `playoff_odds` · `matchup_odds` · `schedule_strength` · `usage` · `breakouts`
+**Analysis** — `waiver_targets` · `bye_outlook` · `playoff_odds` · `matchup_odds` · `schedule_strength` · `playoff_bracket` · `usage` · `breakouts`
 
 **Writes** — `set_lineup` · `waiver_claim` · `cancel_claim` · `set_ir` ·
 `trade_block` · `propose_trade` · `respond_trade` · `pickem_pick` ·
@@ -179,6 +179,11 @@ A few worth calling out:
   of their team's targets and carries, which is how a back who went from 40% of
   snaps to 75% surfaces while he is still available, rather than after the
   projections catch up and someone else claims him.
+- **`playoff_bracket`** is the real bracket rather than a simulation, and from
+  the first playoff week it replaces `playoff_odds` entirely — once the field is
+  set there is nothing left to estimate. Undecided matchups name the game that
+  feeds them ("winner of m1") instead of "TBD". `previous=True` follows the
+  league back a season, which is how you settle an argument about who won.
 - **`playoff_odds`** simulates the remaining schedule 10,000 times and counts
   how often each team lands in a playoff seed. It **reports how much of the
   answer is evidence**: early in a season a team's strength is mostly a league

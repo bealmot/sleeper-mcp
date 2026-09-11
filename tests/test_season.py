@@ -8,6 +8,7 @@ It is a number that looks reasonable and is wrong.
 import math
 
 from sleeper_mcp.season import (  # noqa: E501
+    bracket_champion, bracket_rounds, ordinal, slot_label,
     split_games,
     evidence_weight, league_scoring, shrink, simulate, team_strength,
     win_probability,
@@ -246,3 +247,121 @@ def test_ties_do_not_favour_low_roster_ids():
     res = simulate(records, [], {t: (110.0, 28.0) for t in records},
                    playoff_teams=5, trials=2000, seed=13)
     assert all(0.3 < r["playoff"] < 0.7 for r in res.values())
+
+
+# --- brackets ---------------------------------------------------------------
+# Shapes taken from real Sleeper responses, including the pointer slots, which
+# are the part a hand-written fixture would omit.
+
+# Generic names on purpose. The first draft of these fixtures used the real
+# managers from the league this was developed against, and scripts/check.py
+# refused the push — which is the whole reason that check exists.
+NAMES = {1: "Alder", 2: "Birch", 3: "Cedar", 6: "Fir", 8: "Hazel", 10: "Juniper"}
+
+PLAYED = [
+    {"m": 1, "r": 1, "t1": 3, "t2": 6, "w": 6, "l": 3},
+    {"m": 2, "r": 1, "t1": 8, "t2": 2, "w": 2, "l": 8},
+    {"m": 3, "r": 2, "t1": 1, "t2": 6, "t2_from": {"w": 1}, "w": 1, "l": 6},
+    {"m": 4, "r": 2, "t1": 10, "t2": 2, "t2_from": {"w": 2}, "w": 10, "l": 2},
+    {"m": 5, "r": 3, "t1": 1, "t2": 10, "w": 10, "l": 1},
+    {"m": 6, "r": 3, "p": 3, "t1": 6, "t2": 2, "w": 6, "l": 2},
+]
+
+PENDING = [
+    {"m": 1, "r": 1, "t1": 6, "t2": 3, "w": None, "l": None},
+    {"m": 2, "r": 2, "t1": 10, "t2": None, "t2_from": {"w": 1},
+     "w": None, "l": None},
+    {"m": 3, "r": 3, "p": 3, "t1": None, "t2": None,
+     "t1_from": {"l": 1}, "t2_from": {"l": 2}, "w": None, "l": None},
+]
+
+
+def test_an_undecided_slot_names_the_game_that_feeds_it():
+    """"TBD" discards the only interesting fact about an unplayed bracket."""
+    assert slot_label(None, {"w": 1}, NAMES) == "winner of m1"
+    assert slot_label(None, {"l": 4}, NAMES) == "loser of m4"
+    assert slot_label(6, None, NAMES) == "Fir"
+
+
+def test_an_unknown_roster_is_named_not_dropped():
+    assert slot_label(99, None, NAMES) == "roster 99"
+
+
+def test_rounds_group_and_order():
+    rounds = bracket_rounds(PLAYED, NAMES)
+    assert [r for r, _ in rounds] == [1, 2, 3]
+    assert [m["m"] for m in rounds[0][1]] == [1, 2]
+
+
+def test_a_played_match_reports_both_sides_and_the_winner():
+    first = bracket_rounds(PLAYED, NAMES)[0][1][0]
+    assert (first["t1"], first["t2"]) == ("Cedar", "Fir")
+    assert first["winner"] == "Fir" and first["loser"] == "Cedar"
+    assert first["decided"]
+
+
+def test_a_pending_match_is_not_marked_decided():
+    m2 = bracket_rounds(PENDING, NAMES)[1][1][0]
+    assert m2["t2"] == "winner of m1"
+    assert m2["winner"] is None and not m2["decided"]
+
+
+def test_the_champion_is_the_final_not_the_third_place_game():
+    """THE TRAP. Sleeper often orders the placement game AFTER the final.
+
+    Taking the last match outright crowns whoever won third place.
+    """
+    assert bracket_champion(PLAYED, NAMES) == "Juniper"
+
+
+def test_no_champion_while_the_final_is_unplayed():
+    assert bracket_champion(PENDING, NAMES) is None
+
+
+def test_an_empty_bracket_is_not_a_crash():
+    assert bracket_rounds([], NAMES) == []
+    assert bracket_champion([], NAMES) is None
+    assert bracket_champion(None) is None
+
+
+# --- the championship is a placement game -----------------------------------
+# Shape copied from a real completed Sleeper bracket. Sleeper marks the final
+# `p: 1`, because first place is a placing. Skipping every match with a `p` key
+# therefore skips the final. The earlier version did that, fell back a round,
+# and returned the right champion only because that league's winner had also
+# won his semi-final — so these fixtures deliberately break that tie.
+
+REAL = [
+    {"m": 1, "r": 1, "t1": 8, "t2": 6, "w": 8, "l": 6},
+    {"m": 2, "r": 1, "t1": 2, "t2": 3, "w": 3, "l": 2},
+    {"m": 3, "r": 2, "t1": 1, "t2": 8, "w": 1, "l": 8},
+    {"m": 4, "r": 2, "t1": 10, "t2": 3, "w": 10, "l": 3},
+    {"m": 5, "r": 2, "p": 5, "t1": 6, "t2": 2, "w": 2, "l": 6},
+    {"m": 6, "r": 3, "p": 1, "t1": 1, "t2": 10, "w": 1, "l": 10},
+    {"m": 7, "r": 3, "p": 3, "t1": 8, "t2": 3, "w": 8, "l": 3},
+]
+
+
+def test_the_p1_match_is_the_final():
+    """Alder wins the final; Juniper won the other semi. They must differ."""
+    assert bracket_champion(REAL, NAMES) == "Alder"
+
+
+def test_the_semi_final_winner_is_not_crowned():
+    semis = [r for r in REAL if r["r"] == 2 and not r.get("p")]
+    winners = {NAMES[r["w"]] for r in semis}
+    assert "Juniper" in winners                      # the decoy
+    assert bracket_champion(REAL, NAMES) != "Juniper"
+
+
+def test_an_unplayed_final_has_no_champion_even_when_earlier_rounds_are_done():
+    rows = [dict(r) for r in REAL]
+    for r in rows:
+        if r.get("p") == 1:
+            r["w"] = r["l"] = None
+    assert bracket_champion(rows, NAMES) is None
+
+
+def test_ordinals_read_like_english():
+    assert [ordinal(n) for n in (1, 2, 3, 5, 11, 13, 21)] == \
+        ["1st", "2nd", "3rd", "5th", "11th", "13th", "21st"]

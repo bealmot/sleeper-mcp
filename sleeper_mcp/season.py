@@ -233,3 +233,95 @@ def split_games(weeks: list[tuple[int, list[tuple[int, float, int, float]]]],
             elif not finished:
                 remaining.append((week, ra, rb))
     return scores, remaining
+
+
+# --- playoff brackets -------------------------------------------------------
+# Sleeper returns a bracket as a flat list of matches. Each carries `m` (match
+# id), `r` (round), `t1`/`t2` (roster ids), `w`/`l` (winner/loser once played)
+# and, where a slot is not yet decided, `t1_from`/`t2_from` pointing at another
+# match: {"w": 3} is "the winner of match 3", {"l": 4} is "the loser of match
+# 4". A `p` key marks a placement game — `p: 3` is the third-place match.
+
+def slot_label(team: int | None, frm: dict | None, names: dict) -> str:
+    """What to print for one side of a matchup.
+
+    A decided slot holds a roster id. An undecided one holds a POINTER to
+    another match, and rendering that as "TBD" throws away the only
+    interesting thing about an unplayed bracket — which game feeds it.
+    """
+    if team is not None:
+        return names.get(team, f"roster {team}")
+    if frm:
+        if "w" in frm:
+            return f"winner of m{frm['w']}"
+        if "l" in frm:
+            return f"loser of m{frm['l']}"
+    return "TBD"
+
+
+def bracket_rounds(rows: list[dict], names: dict | None = None
+                   ) -> list[tuple[int, list[dict]]]:
+    """Group a flat bracket into rounds, resolving each slot to a label.
+
+    Returns [(round, [match, ...]), ...] ordered by round then match id, each
+    match carrying both sides' labels, the winner if any, and whether it is a
+    placement game.
+    """
+    names = names or {}
+    by_round: dict[int, list[dict]] = {}
+    for row in rows or []:
+        rnd = row.get("r")
+        if rnd is None:
+            continue
+        w, l = row.get("w"), row.get("l")
+        by_round.setdefault(rnd, []).append({
+            "m": row.get("m"),
+            "round": rnd,
+            "placement": row.get("p"),
+            "t1": slot_label(row.get("t1"), row.get("t1_from"), names),
+            "t2": slot_label(row.get("t2"), row.get("t2_from"), names),
+            "winner": names.get(w, f"roster {w}") if w is not None else None,
+            "loser": names.get(l, f"roster {l}") if l is not None else None,
+            "decided": w is not None,
+        })
+    for matches in by_round.values():
+        matches.sort(key=lambda x: (x["m"] is None, x["m"]))
+    return sorted(by_round.items())
+
+
+def ordinal(n: int) -> str:
+    """1 -> 1st, 3 -> 3rd, 11 -> 11th."""
+    if 10 <= n % 100 <= 20:
+        return f"{n}th"
+    return f"{n}{ {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th') }".replace(" ", "")
+
+
+def bracket_champion(rows: list[dict], names: dict | None = None) -> str | None:
+    """Who won it, or None while the final is unplayed.
+
+    SLEEPER MARKS THE CHAMPIONSHIP GAME `p: 1`. The `p` key means "this decides
+    a placing", and first place is a placing — so treating every match with a
+    `p` as a consolation game skips the final itself. An earlier version did
+    exactly that, fell back to the previous round, and returned the right name
+    purely because that league's champion had also won his semi-final. It would
+    have named the losing finalist in any bracket where those differ.
+
+    So: the final is the `p: 1` match when one exists, and otherwise the last
+    non-placement match of the last round.
+    """
+    names = names or {}
+    rows = [r for r in (rows or []) if r.get("r") is not None]
+    if not rows:
+        return None
+
+    final = next((r for r in rows if r.get("p") == 1), None)
+    if final is None:
+        real = [r for r in rows if not r.get("p")]
+        if not real:
+            return None
+        last = max(r["r"] for r in real)
+        final = max((r for r in real if r["r"] == last),
+                    key=lambda r: r.get("m") or 0)
+
+    w = final.get("w")
+    return names.get(w, f"roster {w}") if w is not None else None

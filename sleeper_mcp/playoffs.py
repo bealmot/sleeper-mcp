@@ -12,7 +12,9 @@ import asyncio
 
 from .client import current_week, league, league_id, mcp, rest
 from .reads import _owners
-from .season import simulate, split_games, team_strength, win_probability
+from .season import (bracket_champion, bracket_rounds, ordinal,
+                     simulate, split_games, team_strength,
+                     win_probability)
 
 
 def _pairs(entries: list[dict]) -> list[tuple[dict, dict]]:
@@ -206,3 +208,78 @@ async def schedule_strength(league_id_: str = "") -> str:
     out += ["", "  opp/wk = mean strength of remaining opponents. "
                 "Positive 'vs lg' is a harder road."]
     return "\n".join(out)
+
+
+@mcp.tool()
+async def playoff_bracket(consolation: bool = False, previous: bool = False,
+                          league_id_: str = "") -> str:
+    """The actual playoff bracket — who plays whom, and who has won.
+
+    This is the real thing rather than a simulation. From the first playoff
+    week it replaces `playoff_odds` entirely: once the field is set there is
+    nothing left to estimate, only games to play.
+
+    SEEDS ARE PROVISIONAL UNTIL THE REGULAR SEASON ENDS. Sleeper publishes a
+    bracket from day one and re-seeds it as the standings move, so it renders
+    perfectly in week 2 while meaning nothing. The output says which of the two
+    it is looking at.
+
+    Args:
+        consolation: Show the losers' bracket instead of the championship one.
+        previous: Follow this league's previous season, to see how it ended.
+        league_id_: Override the configured league.
+    """
+    lg = league_id(league_id_ or None)
+    lg_cfg = await league(lg)
+    if previous:
+        prev = lg_cfg.get("previous_league_id")
+        if not prev or prev in ("0", 0):
+            return "  This league has no previous season on Sleeper."
+        lg = str(prev)
+        lg_cfg = await league(lg)
+
+    settings = lg_cfg.get("settings") or {}
+    start = int(settings.get("playoff_week_start") or 15)
+    path = "losers_bracket" if consolation else "winners_bracket"
+    rows, owner, wk = await asyncio.gather(
+        rest(f"/league/{lg}/{path}"), _owners(lg), current_week())
+
+    rounds = bracket_rounds(rows, owner)
+    if not rounds:
+        return (f"  No {'consolation' if consolation else 'championship'} "
+                f"bracket published for {lg_cfg.get('name')} yet.")
+
+    season = str(lg_cfg.get("season") or "")
+    kind = "consolation" if consolation else "championship"
+    out = [f"  {lg_cfg.get('name')} {season} — {kind} bracket"]
+
+    anything_played = any(m["decided"] for _r, ms in rounds for m in ms)
+    if previous or anything_played:
+        pass
+    elif wk < start:
+        out.append(f"  PROVISIONAL — the regular season runs through week "
+                   f"{start - 1}. Sleeper re-seeds this as the standings move, "
+                   f"so the pairings below are today's, not the field.")
+    out.append("")
+
+    for rnd, matches in rounds:
+        out.append(f"  Round {rnd} — week {start + rnd - 1}")
+        for m in matches:
+            p = m.get("placement")
+            tag = ("  [championship]" if p == 1
+                   else f"  [{ordinal(p)} place]" if p else "")
+            if m["decided"]:
+                beaten = m["t2"] if m["winner"] == m["t1"] else m["t1"]
+                out.append(f"    m{m['m']:<3} {m['winner'][:20]:20} def. "
+                           f"{beaten[:20]}{tag}")
+            else:
+                out.append(f"    m{m['m']:<3} {m['t1'][:20]:20} vs   "
+                           f"{m['t2'][:20]}{tag}")
+        out.append("")
+
+    champ = bracket_champion(rows, owner)
+    if champ and not consolation:
+        out.append(f"  Champion: {champ}")
+    elif not anything_played:
+        out.append("  Nothing played yet.")
+    return "\n".join(out).rstrip()
