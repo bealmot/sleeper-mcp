@@ -14,7 +14,8 @@ return minutes-old data. It is fine for player dictionaries and league config;
 it must NEVER be used to confirm that a write landed. Verify writes over
 GraphQL.
 
-Configuration comes from the environment, all optional:
+Configuration, all optional, from the environment or the config file
+(environment wins; see config.py for why there are two):
 
     SLEEPER_LEAGUE_ID      default league for tools that take one
     SLEEPER_ROSTER_ID      your roster in that league (an int, 1..N)
@@ -23,8 +24,8 @@ Configuration comes from the environment, all optional:
     SLEEPER_TOKEN          JWT, WRITES ONLY — reads never need it
     SLEEPER_ENABLE_WRITES  must be "1" for any mutation to be attempted
 
-Do not know your ids? Call `find_my_leagues("<your username>")`. Everything it
-needs is public.
+`sleeper-mcp setup` verifies a token and writes the file. Do not know your
+ids? Call `find_my_leagues("<your username>")`. Everything it needs is public.
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ import os
 
 import httpx
 
+from . import config as _config
 from .boundaries import check as _policy_check
 
 # SUPPORTS BOTH MAJOR VERSIONS OF THE MCP SDK.
@@ -69,13 +71,14 @@ UA = {"User-Agent": "sleeper-mcp (+https://github.com/bealmot/sleeper-mcp)"}
 
 
 def _env(name: str, default: str = "") -> str:
-    return (os.environ.get(name) or default).strip()
+    """Environment first, then the config file, then the default."""
+    return _config.resolve(name, default)
 
 
 DEFAULT_LEAGUE = _env("SLEEPER_LEAGUE_ID")
 DEFAULT_PICKEM_LEAGUE = _env("SLEEPER_PICKEM_LEAGUE")
 TOKEN = _env("SLEEPER_TOKEN")
-WRITES_ENABLED = _env("SLEEPER_ENABLE_WRITES") == "1"
+WRITES_ENABLED = _config.truthy(_env("SLEEPER_ENABLE_WRITES"))
 
 
 def _int_env(name: str) -> int | None:
@@ -96,6 +99,11 @@ class ConfigError(RuntimeError):
 
 class WritesDisabled(RuntimeError):
     """A mutation was attempted while writes are switched off."""
+
+
+class AuthError(RuntimeError):
+    """Sleeper rejected the token. The message says what is wrong with it
+    (shape, source, likely expiry) without revealing it."""
 
 
 def league_id(explicit: str | None = None) -> str:
@@ -129,14 +137,16 @@ def require_writes(action: str) -> None:
     if not WRITES_ENABLED:
         raise WritesDisabled(
             f"Writes are disabled, so {action} was not attempted. Set "
-            f"SLEEPER_ENABLE_WRITES=1 to allow mutations. Every write tool "
-            f"also has its own dry-run default on top of this.")
+            f"SLEEPER_ENABLE_WRITES=1 (or run `sleeper-mcp setup`) to allow "
+            f"mutations. Every write tool also has its own dry-run default on "
+            f"top of this.")
     if not TOKEN:
         raise ConfigError(
-            f"{action} needs SLEEPER_TOKEN. It is the JWT in the Sleeper web "
-            f"app under localStorage key 'token' (DevTools > Application > "
-            f"Local Storage > sleeper.com). It is account-scoped and lasts "
-            f"about a year. Reads need no token at all.")
+            f"{action} needs SLEEPER_TOKEN. Run `sleeper-mcp setup`, or set it: "
+            f"it is the JWT in the Sleeper web app under localStorage key "
+            f"'token' (DevTools > Application > Local Storage > sleeper.com). "
+            f"It is account-scoped and lasts about a year. Reads need no token "
+            f"at all.")
 
 
 async def gql(query: str, variables: dict | None = None,
@@ -154,13 +164,18 @@ async def gql(query: str, variables: dict | None = None,
         if not TOKEN:
             raise ConfigError(
                 "This query is authenticated and SLEEPER_TOKEN is not set. "
-                "Most reads work without it; this one does not.")
+                "Most reads work without it; this one does not. "
+                "`sleeper-mcp setup` saves one.")
         headers["authorization"] = TOKEN
     body: dict = {"query": query}
     if variables:
         body["variables"] = variables
     async with httpx.AsyncClient(timeout=45) as c:
         r = await c.post(GQL, json=body, headers=headers)
+        if r.status_code == 401:
+            # The bare 401 is the single most common support question, and
+            # the cause is almost always the token's delivery, not Sleeper.
+            raise AuthError(_config.explain_401(TOKEN))
         r.raise_for_status()
         d = r.json()
     if d.get("errors"):

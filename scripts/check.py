@@ -87,12 +87,17 @@ PRIVATE = [
 #                  honest fix; obfuscating the patterns to dodge it would make
 #                  the list unreadable for no gain.
 PRIVACY_EXEMPT = {"API-NOTES.md", "check.py"}
+# Directories that are never ours: a virtualenv inside the checkout is full of
+# other people's paths (pytest and pydantic ship files mentioning /home/...).
+SKIP_DIRS = {".git", ".venv", "venv", "__pycache__", "node_modules", "dist",
+             "build", ".tox", ".mypy_cache", ".pytest_cache"}
 
 
 def check_privacy() -> bool:
     hits = []
     for f in sorted(ROOT.rglob("*")):
-        if not f.is_file() or ".git/" in str(f) or f.name in PRIVACY_EXEMPT:
+        if (not f.is_file() or set(f.parts) & SKIP_DIRS
+                or f.name in PRIVACY_EXEMPT):
             continue
         if f.suffix not in (".py", ".md", ".toml", ".json", ".txt", ".sh", ""):
             continue

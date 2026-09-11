@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import datetime as dt
 
-from .client import mcp, rest
+from . import config as _config
+from .client import (DEFAULT_LEAGUE, DEFAULT_ROSTER, TOKEN, WRITES_ENABLED,
+                     AuthError, gql, mcp, rest)
 
 
 @mcp.tool()
@@ -121,3 +123,68 @@ async def league_info(league_id: str = "") -> str:
         out.append("    -> it also pays FIRST DOWNS, which most rankings and "
                    "projections do not account for")
     return "\n".join(out)
+
+
+@mcp.tool()
+async def auth_status() -> str:
+    """Where each setting came from and whether the token actually works.
+
+    Call this first when a write or an authenticated read fails. It reports
+    the token's length, shape and source (environment or config file), names
+    the usual delivery mistakes — an unexpanded ${SLEEPER_TOKEN}, surrounding
+    quotes, a "Bearer " prefix — and then asks Sleeper whether it accepts the
+    token. The token itself is never included in the output.
+    """
+    path = _config.config_path()
+    out = [f"config file    {path}  ({'present' if path.exists() else 'absent'})",
+           f"token          {_config.describe_token(TOKEN)}"]
+    for p in _config.diagnose_token(TOKEN):
+        out.append(f"  !! {p}")
+    out.append(f"writes         {'ENABLED' if WRITES_ENABLED else 'disabled'}  "
+               f"(from {_config.source('SLEEPER_ENABLE_WRITES')})")
+    out.append(f"league id      {DEFAULT_LEAGUE or '-'}  "
+               f"(from {_config.source('SLEEPER_LEAGUE_ID')})")
+    out.append(f"roster id      {DEFAULT_ROSTER if DEFAULT_ROSTER is not None else '-'}  "
+               f"(from {_config.source('SLEEPER_ROSTER_ID')})")
+    out.append("")
+    if not TOKEN:
+        out.append("live check     skipped — no token. Reads work without one; "
+                   "run `sleeper-mcp setup` to add one for writes.")
+        return "\n".join(out)
+    try:
+        me = (await gql("{ me { user_id display_name } }", auth=True)).get("me") or {}
+        who = me.get("display_name") or me.get("user_id") or "?"
+        out.append(f"live check     OK — Sleeper accepts the token; it belongs to {who}")
+    except AuthError as e:
+        out.append(f"live check     FAILED — {e}")
+    except Exception as e:                                   # noqa: BLE001
+        out.append(f"live check     could not run ({e.__class__.__name__}: {e}). "
+                   f"That is a network or API problem, not evidence the token is bad.")
+    return "\n".join(out)
+
+
+@mcp.tool()
+async def setup_token(enable_writes: bool = False) -> str:
+    """Start a one-time local page for adding your Sleeper token SAFELY.
+
+    Use this instead of ever pasting the token into the conversation. The
+    server opens a random, single-use address on 127.0.0.1 that expires in
+    five minutes; you open it in the browser where you are logged in to
+    Sleeper and follow one of three routes (a one-line console snippet that
+    needs nothing copied, a copy-and-paste into a masked field, or the manual
+    DevTools path). The token goes browser -> loopback -> this process ->
+    config file (0600), is verified against Sleeper before it is saved, and
+    takes effect immediately — no restart. It never appears in a tool result.
+
+    Args:
+        enable_writes: Also switch writes on (lineups, waivers, trades).
+            Every write tool still dry-runs unless called with confirm=True.
+    """
+    from .webauth import start
+    s = start(enable_writes=enable_writes)
+    return (f"Open this in the browser where you are logged in to Sleeper:\n\n"
+            f"    {s.url}\n\n"
+            f"The page explains three ways to hand over the token; the first "
+            f"needs nothing copied. The link works once and expires in 5 "
+            f"minutes. When the page reports success, call auth_status to "
+            f"confirm — the running server already uses the new token.")
