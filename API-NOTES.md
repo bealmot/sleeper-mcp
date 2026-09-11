@@ -117,6 +117,36 @@ on the bench because he occupies the IR slot. Not a bug.
 Sleeper only renders lineup controls on the `/team` route — you cannot swap a
 player from `/matchup` by hand. The API does not care.
 
+## `league_transactions_by_player`
+
+Authenticated, unlike most league reads — it returns `Unauthorized` without a
+token rather than an empty list.
+
+**It spans seasons.** Sleeper follows the league's `previous_league_id` chain,
+so a keeper league returns draft, waiver and trade history going back years.
+Asking the 2026 league about a player returned moves from 2024.
+
+**It returns every transaction that TOUCHED the player, in either direction.**
+A row can read `adds: {"10226": 5}, drops: {"9754": 5}` — that is a claim on
+10226, and 9754 is only the corresponding cut. The same row means "acquired"
+in one player's history and "released" in another's, so rows must be classified
+relative to the player asked about. Reading them all as acquisitions produces a
+history in which a player was signed six times and never released.
+
+**A trade puts the player in BOTH `adds` and `drops`**, moving him between the
+two rosters in `roster_ids`. That is what distinguishes a trade from an add
+that happened to cut somebody.
+
+**The season rollover is one transaction typed `draft_pick`** with `adds: null`
+and a dozen `drops` — the previous year's roster cleared before the new draft.
+Rendered as an ordinary cut it becomes "dropped him for <three arbitrary
+team-mates>" under the heading "draft": wrong about the reason, wrong about the
+other names, and incoherent about the type. Team defences appear in these lists
+keyed by team abbreviation (`"SF"`) rather than a numeric id.
+
+Timestamps in `created` are epoch **milliseconds**. Read as seconds every
+transaction lands in 1970.
+
 ## Stats: `weekly_stats`, `season_stats`, `get_player_stats`
 
 Real production data — snaps, targets, carries, red-zone looks — lives here and

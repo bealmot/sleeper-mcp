@@ -452,3 +452,84 @@ async def pickem_status(week: int = 0, pickem_league: str = "",
     if len(picks) < exp:
         out.append(f"\n  *** {exp - len(picks)} PICK(S) MISSING ***")
     return "\n".join(out)
+
+
+@mcp.tool()
+async def player_history(player_name: str, limit: int = 25,
+                         league_id_: str = "") -> str:
+    """Every time this league has added, dropped or traded one player.
+
+    NEEDS A TOKEN, unlike most reads here.
+
+    Useful for deciding whether a free agent is genuinely available or merely
+    between owners. A player four managers have tried and cut is a different
+    proposition from one nobody has ever claimed, and the waiver wire does not
+    distinguish them.
+
+    THE HISTORY SPANS SEASONS. Sleeper follows the league's previous_league_id
+    chain, so a keeper league returns draft and trade history going back years,
+    not just this season.
+
+    Args:
+        player_name: Full or partial name.
+        limit: How many transactions. Default 25.
+        league_id_: Override the configured league.
+    """
+    from .moves import churn, history          # local: keeps this module light
+
+    lg = league_id(league_id_ or None)
+    P = await players()
+    hits = _find(P, player_name)
+    if len(hits) != 1:
+        return _ambiguous(player_name, hits)
+    pid, v = hits[0]
+
+    q = ('{league_transactions_by_player(league_id:"%s",player_id:"%s",'
+         'limit:%d,offset:0){type status created leg roster_ids adds drops '
+         'waiver_budget}}' % (lg, pid, max(1, min(limit, 100))))
+    rows = (await gql(q, auth=True)).get("league_transactions_by_player") or []
+    moves = history(rows, pid)
+    if not moves:
+        return (f"  {v.get('full_name')} has never been transacted in this "
+                f"league — never drafted, claimed or dropped.")
+
+    owner = await _owners(lg)
+
+    def who(rid):
+        return owner.get(rid, f"roster {rid}") if rid is not None else "?"
+
+    def named(pids):
+        out = []
+        for p in pids[:3]:
+            rec = P.get(p) or {}
+            out.append(rec.get("full_name") or f"player {p}")
+        return ", ".join(out)
+
+    c = churn(moves)
+    out = [f"  {v.get('full_name')} — {v.get('position')} {v.get('team')}",
+           f"  {c['moves']} move(s) across {c['rosters']} roster(s): "
+           f"{c['adds']} added, {c['drops']} dropped, {c['trades']} traded", ""]
+    for m in moves:
+        wk = f"wk{m['week']}" if m["week"] else "  -"
+        faab = f" ${m['faab']}" if m["faab"] else ""
+        if m["kind"] == "traded":
+            line = (f"{who(m['from_roster'])} -> {who(m['to_roster'])}"
+                    + (f" for {named(m['others'])}" if m["others"] else ""))
+        elif m["kind"] == "dropped":
+            line = f"{who(m['from_roster'])} dropped him"
+            if m["bulk"]:
+                # Naming three of a dozen released team-mates implies he was
+                # cut FOR them. He was cut WITH them.
+                line += f", with {len(m['others'])} others"
+            elif m["others"]:
+                line += f" for {named(m['others'])}"
+        elif m["kind"] == "drafted":
+            line = f"{who(m['to_roster'])} drafted him"
+        else:
+            line = f"{who(m['to_roster'])} added him"
+            if m["bulk"]:
+                line += f", with {len(m['others'])} others"
+            elif m["others"]:
+                line += f", dropping {named(m['others'])}"
+        out.append(f"  {m['date']}  {wk:>4}  {m['how']:<13}{faab:<5} {line}")
+    return "\n".join(out)
