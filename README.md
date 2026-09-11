@@ -21,8 +21,13 @@ than the code.
 ## Install
 
 ```bash
-pip install sleeper-mcp        # or: uv tool install sleeper-mcp
+uv tool install git+https://github.com/bealmot/sleeper-mcp
 ```
+
+Or with pip: `pip install git+https://github.com/bealmot/sleeper-mcp`.
+
+Not on PyPI yet. It goes there once the API surface has settled, so that a
+version number means something. Install from git until then.
 
 Then add it to your MCP client. For Claude Desktop, in `claude_desktop_config.json`:
 
