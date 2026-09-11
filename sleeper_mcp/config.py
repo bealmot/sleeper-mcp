@@ -91,21 +91,37 @@ def truthy(value: str) -> bool:
 def save(updates: dict) -> pathlib.Path:
     """Merge `updates` into the config file.
 
-    The directory is created 0700 and the file written 0600 via a temp file
-    and rename, so a half-written file is never left behind and the token is
-    never world-readable, not even briefly.
+    The file is CREATED 0600 and then renamed into place, so a half-written
+    file is never left behind and the token is never world-readable, not even
+    briefly. That last part used to be untrue: the temp file was written with
+    `write_text` and chmod'd afterwards, which measurably leaves it at 0644
+    with the token already in it. Permission must be set at creation, not
+    after, or there is a window regardless of how short the code looks.
+
+    The parent directory is tightened ONLY when this function created it.
+    SLEEPER_MCP_CONFIG can point anywhere, and chmodding its parent
+    unconditionally meant that pointing it at ~/.sleeperrc silently set the
+    user's HOME to 0700 — a tool must not restrict a directory it was merely
+    passed.
     """
     path = config_path()
+    created = not path.parent.exists()
     path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        os.chmod(path.parent, 0o700)
-    except OSError:
-        pass
+    if created:
+        try:
+            os.chmod(path.parent, 0o700)
+        except OSError:
+            pass
     data = load_file()
     data.update({k: v for k, v in updates.items() if v is not None})
     tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    os.chmod(tmp, 0o600)
+    body = (json.dumps(data, indent=2) + "\n").encode("utf-8")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, body)
+    finally:
+        os.close(fd)
+    os.chmod(tmp, 0o600)          # belt and braces: umask cannot widen it
     os.replace(tmp, path)
     return path
 

@@ -105,3 +105,49 @@ def test_explain_401_points_at_setup():
 def test_truthy():
     assert config.truthy("1") and config.truthy("True") and config.truthy("yes")
     assert not config.truthy("0") and not config.truthy("") and not config.truthy("no")
+
+
+# --- file and directory permissions -----------------------------------------
+# Both of these pin real defects found by review, not hypotheticals.
+
+def test_the_token_file_is_never_created_world_readable(tmp_path, monkeypatch):
+    """THE REGRESSION. The temp file used to be written and chmod'd AFTER.
+
+    Measured at 0644 with the token already in it. A window that short still
+    looks like zero in the code and is not zero on disk, so the mode has to be
+    set at creation. This captures the actual mode passed to os.open.
+    """
+    monkeypatch.setenv("SLEEPER_MCP_CONFIG", str(tmp_path / "d" / "c.json"))
+    modes = []
+    real_open = os.open
+
+    def spy(path, flags, mode=0o777, *a, **kw):
+        if flags & os.O_CREAT:
+            modes.append(mode)
+        return real_open(path, flags, mode, *a, **kw)
+
+    monkeypatch.setattr(os, "open", spy)
+    config.save({"token": "aaa.bbb.ccc"})
+    assert modes, "the config file was not created through os.open"
+    assert all(m & 0o077 == 0 for m in modes), f"created group/other-readable: {modes}"
+
+
+def test_save_does_not_tighten_a_directory_it_did_not_create(tmp_path, monkeypatch):
+    """THE REGRESSION. SLEEPER_MCP_CONFIG=~/.sleeperrc chmod'd $HOME to 0700.
+
+    A tool may secure a directory it made. It must not silently restrict one
+    it was merely pointed at.
+    """
+    existing = tmp_path / "shared"
+    existing.mkdir()
+    os.chmod(existing, 0o755)
+    monkeypatch.setenv("SLEEPER_MCP_CONFIG", str(existing / "c.json"))
+    config.save({"token": "aaa.bbb.ccc"})
+    assert stat.S_IMODE(existing.stat().st_mode) == 0o755
+    assert stat.S_IMODE((existing / "c.json").stat().st_mode) == 0o600
+
+
+def test_save_does_secure_a_directory_it_creates(tmp_path, monkeypatch):
+    monkeypatch.setenv("SLEEPER_MCP_CONFIG", str(tmp_path / "mine" / "c.json"))
+    config.save({"token": "aaa.bbb.ccc"})
+    assert stat.S_IMODE((tmp_path / "mine").stat().st_mode) == 0o700

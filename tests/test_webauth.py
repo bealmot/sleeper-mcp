@@ -9,7 +9,12 @@ import time
 
 import pytest
 
-from sleeper_mcp import client, config, webauth
+# client imports httpx, so without it this module aborts COLLECTION and takes
+# every other test file down with it — the suite reported "1 error" and ran
+# nothing. test_compat.py already used this guard; it belongs here too.
+pytest.importorskip("httpx")
+
+from sleeper_mcp import client, config, webauth      # noqa: E402
 
 GOOD = "eyJab.cdefg.hijkl"                  # shape-valid, not a real JWT
 
@@ -112,3 +117,48 @@ def test_normalise():
     assert webauth.normalise("'abc.def.ghi'") == "abc.def.ghi"
     assert webauth.normalise("abc.def.ghi\n") == "abc.def.ghi"
     assert webauth.normalise("") == ""
+
+
+# --- origin ------------------------------------------------------------------
+# CORS response headers decide whether a PAGE MAY READ A RESPONSE. They do not
+# stop a request being delivered and acted on: a POST with content-type
+# text/plain is a CORS "simple request" and is sent with no preflight. The
+# nonce is the real protection here and it is sound; these pin the second lock,
+# because the ORIGIN constant used only to be advertised, never checked.
+
+def _post_from(s, origin, path, body=GOOD):
+    c = http.client.HTTPConnection("127.0.0.1", s.port, timeout=5)
+    headers = {"Content-Type": "text/plain"}
+    if origin is not None:
+        headers["Origin"] = origin
+    c.request("POST", path, body=body, headers=headers)
+    r = c.getresponse()
+    return r.status, r.read().decode()
+
+
+def test_a_foreign_origin_is_refused(cfg):
+    s = webauth.start(verify=_verify_ok, ttl=30)
+    status, _body = _post_from(s, "https://evil.example", f"/token/{s.nonce}")
+    assert status == 404
+    assert not s.done.is_set(), "a cross-site post was allowed to set the token"
+    assert config.load_file().get("token") is None
+
+
+def test_no_origin_is_allowed(cfg):
+    """curl and a plain form post carry none; only browsers add it."""
+    s = webauth.start(verify=_verify_ok, ttl=30)
+    status, _body = _post_from(s, None, f"/token/{s.nonce}")
+    assert status == 200
+
+
+def test_the_sleeper_origin_is_allowed(cfg):
+    s = webauth.start(verify=_verify_ok, ttl=30)
+    status, _body = _post_from(s, "https://sleeper.com", f"/token/{s.nonce}")
+    assert status == 200
+
+
+def test_the_pages_own_origin_is_allowed(cfg):
+    """The masked-paste form posts from the setup page itself."""
+    s = webauth.start(verify=_verify_ok, ttl=30)
+    status, _body = _post_from(s, f"http://127.0.0.1:{s.port}", f"/token/{s.nonce}")
+    assert status == 200

@@ -163,6 +163,22 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *_):            # never log paths or bodies
         pass
 
+    def _origin_ok(self) -> bool:
+        """CORS headers do NOT gate this endpoint — so check the origin.
+
+        Access-Control-Allow-Origin controls whether a PAGE MAY READ A
+        RESPONSE. It does not stop the request being delivered and executed:
+        a POST with content-type text/plain is a CORS "simple request" and is
+        sent with no preflight at all. The nonce is what genuinely protects
+        this listener, and it does; this is the cheap second lock, and it
+        makes the code mean what its ORIGIN constant implies.
+
+        A missing Origin is allowed — curl and a plain form post have none,
+        while a cross-site request always carries one.
+        """
+        got = self.headers.get("Origin")
+        return got in (None, "", ORIGIN, f"http://127.0.0.1:{self.session.port}")
+
     def _cors(self):
         self.send_header("Access-Control-Allow-Origin", ORIGIN)
         self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
@@ -195,14 +211,14 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
         kind, nonce = self._route()
-        if kind == "token" and self.session.matches(nonce):
+        if kind == "token" and self.session.matches(nonce) and self._origin_ok():
             return self._send(204, b"", "text/plain", cors=True)
         self._send(404, b"not found", "text/plain")
 
     def do_POST(self):
         kind, nonce = self._route()
         s = self.session
-        if kind != "token" or not s.matches(nonce):
+        if kind != "token" or not s.matches(nonce) or not self._origin_ok():
             return self._send(404, b"not found", "text/plain")
         n = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(min(n, 65536)).decode("utf-8", "replace")
