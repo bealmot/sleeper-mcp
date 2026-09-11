@@ -15,6 +15,7 @@ general tidiness:
   docstrings    every tool has one, because it is what the model reads
   boundaries    the real-money guard still refuses what it claims to
   tests         pytest
+  install       --fresh only: resolve and import in a CLEAN venv
 
 PRIVACY IS THE ONE THAT EARNS ITS KEEP. This server was extracted from a
 private homelab server that is still in use, and the natural way to add a
@@ -24,6 +25,7 @@ person's league ids, team names and league-mates. This check fails the push.
 
 from __future__ import annotations
 
+import argparse
 import ast
 import pathlib
 import re
@@ -179,6 +181,52 @@ def check_boundaries() -> bool:
                     f"{len(must_allow)} allowed)"))
 
 
+def check_fresh_install() -> bool:
+    """Resolve dependencies into a CLEAN venv and import the package.
+
+    THE ONE FAILURE MODE EVERY OTHER CHECK IS BLIND TO. Every check above runs
+    against whatever is already installed here — so a dependency that no longer
+    resolves for a NEW user passes them all while the published package is
+    unusable.
+
+    That is not hypothetical. The first outside contributor hit exactly this:
+    `mcp` released a 2.x that renamed FastMCP to MCPServer, a fresh
+    `pip install` pulled it, and the server died on import. Nothing local could
+    have caught it, because this machine had a working 1.x venv from months
+    earlier.
+
+    Slow (it downloads), so it is opt-in rather than part of the pre-push hook.
+    """
+    import shutil
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="sleeper-mcp-fresh-")
+    try:
+        r = subprocess.run([sys.executable, "-m", "venv", f"{tmp}/venv"],
+                           capture_output=True, text=True)
+        if r.returncode:
+            return fail("install — could not create a venv",
+                        r.stderr.splitlines()[-5:])
+        pip, py = f"{tmp}/venv/bin/pip", f"{tmp}/venv/bin/python"
+        r = subprocess.run([pip, "install", "-q", str(ROOT)],
+                           capture_output=True, text=True)
+        if r.returncode:
+            return fail("install — dependencies do not resolve",
+                        (r.stderr or r.stdout).splitlines()[-8:])
+        r = subprocess.run(
+            [py, "-c", "import sleeper_mcp.server as s; "
+                       "print(len(s.mcp._tool_manager.list_tools()))"],
+            capture_output=True, text=True)
+        if r.returncode:
+            return fail("install — resolves but does not import",
+                        (r.stderr or "").strip().splitlines()[-8:]
+                        + ["", "A dependency's new major version probably "
+                              "changed its API. Pin it."])
+        return ok(f"install (clean venv resolves and imports; "
+                  f"{r.stdout.strip()} tools)")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def check_tests() -> bool:
     r = subprocess.run([sys.executable, "-m", "pytest", "-q",
                         str(ROOT / "tests")],
@@ -189,9 +237,20 @@ def check_tests() -> bool:
 
 
 def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--fresh", action="store_true",
+                    help="also resolve and import in a clean venv (slow, "
+                         "downloads; catches broken dependency pins)")
+    args = ap.parse_args()
+
     print(f"{DIM}sleeper-mcp local checks — {ROOT}{OFF}")
     results = [check_syntax(), check_privacy(), check_secrets(),
                check_docstrings(), check_boundaries(), check_tests()]
+    if args.fresh:
+        results.append(check_fresh_install())
+    else:
+        print(f"  {DIM}skip{OFF}  install — run with --fresh to resolve "
+              f"dependencies in a clean venv")
     failed = results.count(False)
     print()
     if failed:

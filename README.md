@@ -166,6 +166,7 @@ purpose:
 
 ```bash
 python3 scripts/check.py                 # run them
+python3 scripts/check.py --fresh         # + resolve deps in a clean venv (slow)
 git config core.hooksPath .githooks      # once, to run them before every push
 ```
 
@@ -175,6 +176,12 @@ league's ids, team names or local paths appear in a committed file. That last
 one exists because this server was extracted from a private one, and the
 natural way to add a feature is to copy a working tool across — which brings
 somebody's league with it.
+
+`--fresh` is the one worth running before a release. Every other check runs
+against whatever is already installed here, so a dependency that no longer
+resolves for a NEW user passes them all while the published package is
+unusable — which is exactly what happened when `mcp` 2.x renamed `FastMCP`
+(#1). It downloads, so it is opt-in rather than part of the hook.
 
 `git push --no-verify` bypasses the hook if you ever need it to.
 
