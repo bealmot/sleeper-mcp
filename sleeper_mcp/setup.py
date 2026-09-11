@@ -106,10 +106,31 @@ def status() -> int:
     return 0
 
 
-USAGE = """usage: sleeper-mcp            run the MCP server (stdio)
-       sleeper-mcp setup      save a verified token + default ids to the config file
-       sleeper-mcp status     show where settings come from and whether the token works
+USAGE = """usage: sleeper-mcp                 run the MCP server (stdio)
+       sleeper-mcp setup           save a verified token + default ids (terminal prompts)
+       sleeper-mcp setup --web     same, via a one-time local page — nothing typed
+       sleeper-mcp status          where settings come from, and whether the token works
 """
+
+
+def setup_web(open_browser: bool = True) -> int:
+    """`sleeper-mcp setup --web`: the one-time local page, from a terminal."""
+    from .webauth import start
+    s = start(enable_writes=False)
+    print(f"open this in the browser where you are logged in to Sleeper:\n\n"
+          f"    {s.url}\n\nsingle use, expires in 5 minutes. Waiting ...")
+    if open_browser:
+        import webbrowser
+        webbrowser.open(s.url)
+    s.done.wait()
+    print(s.result)
+    if s.result and "saved" in s.result:
+        ans = _ask("enable writes (lineups, waivers, trades)? [y/N]: ")
+        if ans.lower() in ("y", "yes"):
+            config.save({"enable_writes": "1"})
+            print("  writes ON. Every write tool still dry-runs unless confirm=True.")
+        return 0
+    return 1
 
 
 def dispatch(argv: list[str]) -> int | None:
@@ -118,6 +139,8 @@ def dispatch(argv: list[str]) -> int | None:
         return None
     cmd = argv[0]
     if cmd == "setup":
+        if "--web" in argv[1:]:
+            return setup_web(open_browser="--no-browser" not in argv)
         return setup()
     if cmd == "status":
         return status()

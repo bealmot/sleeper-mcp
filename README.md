@@ -66,6 +66,28 @@ When something is off, `sleeper-mcp status` (or the `auth_status` tool from
 inside your assistant) says where each setting came from, what is wrong with
 the token's shape, and whether Sleeper accepts it — without printing it.
 
+### Adding the token without typing it
+
+```bash
+sleeper-mcp setup --web
+```
+
+or, from inside your assistant, the `setup_token` tool. Either opens a
+random, single-use address on `127.0.0.1` (five-minute expiry) that offers
+three routes, best first:
+
+1. paste a one-line snippet into the console on sleeper.com — it sends
+   `localStorage.token` straight to the local page, nothing copied or typed
+2. `copy(localStorage.token)` in that console, then paste into a masked field
+3. the manual DevTools path, spelled out per browser
+
+Whatever arrives is un-quoted (localStorage stores the token JSON-quoted, and
+Sleeper rejects it in that form), verified against Sleeper, and only then
+saved. The running server picks it up immediately. **Never paste the token
+into the conversation itself** — transcripts are logged — and this tool never
+returns it. (MCP's elicitation forms are deliberately not used: the spec
+forbids them for secrets.)
+
 ## Finding your ids
 
 You do not need them to start. Ask your assistant to run:
@@ -114,7 +136,7 @@ executes immediately with no veto window.
 **Reads** — `roster` · `matchup` · `standings` · `transactions` · `pending` ·
 `player_news` · `player_outlook` · `trending` · `draft_picks` · `chat` ·
 `watched_players` · `pickem_status` · `league_info` · `find_my_leagues` ·
-`auth_status`
+`auth_status` · `setup_token`
 
 **Analysis** — `waiver_targets` · `bye_outlook`
 
