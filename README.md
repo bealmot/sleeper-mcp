@@ -151,6 +151,8 @@ belong with them.
 
 - **Undocumented API.** Sleeper can change or close any of this without notice,
   including GraphQL introspection.
+- **Works on both MCP SDK majors.** `mcp` 2.0 renamed `FastMCP` to `MCPServer`;
+  this server detects which is present, so `mcp>=1.2.0` needs no upper pin.
 - **Player names are not unique.** The dictionary holds ~11,000 entries
   including retired players — "Kenneth Walker" matches two. Tools resolve names
   against your *roster* wherever possible for exactly this reason.

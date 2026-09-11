@@ -213,8 +213,10 @@ def check_fresh_install() -> bool:
             return fail("install — dependencies do not resolve",
                         (r.stderr or r.stdout).splitlines()[-8:])
         r = subprocess.run(
-            [py, "-c", "import sleeper_mcp.server as s; "
-                       "print(len(s.mcp._tool_manager.list_tools()))"],
+            # Public async list_tools() — present in BOTH mcp 1.x and 2.x.
+            # The private _tool_manager is not a contract and differs.
+            [py, "-c", "import asyncio, sleeper_mcp.server as s; "
+                       "print(len(asyncio.run(s.mcp.list_tools())))"],
             capture_output=True, text=True)
         if r.returncode:
             return fail("install — resolves but does not import",

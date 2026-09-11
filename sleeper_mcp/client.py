@@ -33,9 +33,24 @@ import logging
 import os
 
 import httpx
-from mcp.server import FastMCP
 
 from .boundaries import check as _policy_check
+
+# SUPPORTS BOTH MAJOR VERSIONS OF THE MCP SDK.
+#
+# mcp 2.0 renamed FastMCP to MCPServer. The surface this server actually uses
+# is unchanged across the rename — same @tool() decorator, same synchronous
+# run(transport=...), same async list_tools(), same leading constructor args —
+# so a two-line shim covers both rather than stranding users on one major
+# version. Verified against mcp 1.x and 2.2.0.
+#
+# Prefer the v2 name: a v1 install has no MCPServer, so the fallback is the
+# one that fires, and new installs get the current class without a deprecation
+# path to maintain.
+try:                                    # mcp >= 2
+    from mcp.server import MCPServer as _Server
+except ImportError:                     # mcp 1.x
+    from mcp.server import FastMCP as _Server
 
 # httpx logs full request URLs at INFO. Nothing here puts a secret in a URL,
 # but a token in a header is one refactor away from being one, so keep the
@@ -43,7 +58,7 @@ from .boundaries import check as _policy_check
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
-mcp = FastMCP("sleeper")
+mcp = _Server("sleeper")
 
 GQL = "https://sleeper.com/graphql"
 REST = "https://api.sleeper.app/v1"
