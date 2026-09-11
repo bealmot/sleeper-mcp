@@ -91,7 +91,7 @@ executes immediately with no veto window.
 `player_news` · `player_outlook` · `trending` · `draft_picks` · `chat` ·
 `watched_players` · `pickem_status` · `league_info` · `find_my_leagues`
 
-**Analysis** — `waiver_targets` · `bye_outlook`
+**Analysis** — `waiver_targets` · `bye_outlook` · `playoff_odds` · `matchup_odds` · `schedule_strength`
 
 **Writes** — `set_lineup` · `waiver_claim` · `cancel_claim` · `set_ir` ·
 `trade_block` · `propose_trade` · `respond_trade` · `pickem_pick` ·
@@ -118,6 +118,19 @@ A few worth calling out:
   projection or generic value over replacement. A high-projection player at a
   position you are already deep in correctly prices at zero. "Nothing improves
   your lineup this week" is a real answer and it will give it.
+- **`playoff_odds`** simulates the remaining schedule 10,000 times and counts
+  how often each team lands in a playoff seed. It **reports how much of the
+  answer is evidence**: early in a season a team's strength is mostly a league
+  prior rather than anything it has done, and the output says so rather than
+  printing a number that looks equally solid in week 2 and week 12. With no
+  completed games it returns a near-uniform field, which is the honest answer.
+- **`matchup_odds`** turns a projected points gap into a win probability,
+  accounting for how noisy a fantasy week is. A 15-point edge is far less
+  decisive than it sounds when weekly swings run 25 points or more.
+- **`schedule_strength`** ranks the difficulty of what each team has *left*.
+  This is the part of a playoff race nobody tracks by eye, and it decides
+  bubble seeds — two teams on identical records can face remaining schedules a
+  touchdown apart per week.
 - **`bye_outlook`** shows which upcoming weeks you cannot field a *legal*
   lineup and which slot goes empty, so a bye-week hole surfaces in September
   rather than on the Sunday it bites.

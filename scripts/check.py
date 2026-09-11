@@ -133,8 +133,16 @@ def check_secrets() -> bool:
 
 
 def check_docstrings() -> bool:
-    """Every @mcp.tool needs a docstring — it is the tool's interface."""
-    missing = []
+    """Every tool needs a docstring — it is the tool's interface.
+
+    COUNTS FROM THE AST, NOT THE TEXT. This used to report the number of
+    literal "@mcp.tool" strings in the package, which included the sentence in
+    server.py explaining what the decorator does. The checker was counting its
+    own documentation as a tool, and reported one too many from the day it was
+    written — a reassuring number nobody re-derived. Parse the structure; do
+    not grep the prose that describes the structure.
+    """
+    missing, n = [], 0
     for f in PKG.glob("*.py"):
         tree = ast.parse(f.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
@@ -144,10 +152,11 @@ def check_docstrings() -> bool:
                 (isinstance(d, ast.Call) and getattr(d.func, "attr", "") == "tool")
                 or getattr(d, "attr", "") == "tool"
                 for d in node.decorator_list)
-            if decorated and not ast.get_docstring(node):
+            if not decorated:
+                continue
+            n += 1
+            if not ast.get_docstring(node):
                 missing.append(f"{f.name}:{node.lineno} {node.name}")
-    n = sum(1 for f in PKG.glob("*.py")
-            for _ in re.finditer(r"@mcp\.tool", f.read_text(encoding="utf-8")))
     return (fail("docstrings", missing) if missing
             else ok(f"docstrings ({n} tools, all documented)"))
 
