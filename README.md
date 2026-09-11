@@ -143,7 +143,7 @@ executes immediately with no veto window.
 `watched_players` · `pickem_status` · `league_info` · `find_my_leagues` ·
 `auth_status` · `setup_token`
 
-**Analysis** — `waiver_targets` · `bye_outlook` · `playoff_odds` · `matchup_odds` · `schedule_strength`
+**Analysis** — `waiver_targets` · `bye_outlook` · `playoff_odds` · `matchup_odds` · `schedule_strength` · `usage` · `breakouts`
 
 **Writes** — `set_lineup` · `waiver_claim` · `cancel_claim` · `set_ir` ·
 `trade_block` · `propose_trade` · `respond_trade` · `pickem_pick` ·
@@ -170,6 +170,15 @@ A few worth calling out:
   projection or generic value over replacement. A high-projection player at a
   position you are already deep in correctly prices at zero. "Nothing improves
   your lineup this week" is a real answer and it will give it.
+- **`usage`** and **`breakouts`** are the only tools here that read what
+  players actually *did* — snap share, target share, red-zone looks — rather
+  than what they are projected to do. That distinction is the point. A
+  projection is rebuilt from box scores, so it describes the week that
+  happened; usage describes the week a coach is planning, and it moves first.
+  `breakouts` ranks free agents in your league by the **change** in their share
+  of their team's targets and carries, which is how a back who went from 40% of
+  snaps to 75% surfaces while he is still available, rather than after the
+  projections catch up and someone else claims him.
 - **`playoff_odds`** simulates the remaining schedule 10,000 times and counts
   how often each team lands in a playoff seed. It **reports how much of the
   answer is evidence**: early in a season a team's strength is mostly a league

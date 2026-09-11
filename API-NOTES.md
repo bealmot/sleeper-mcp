@@ -117,6 +117,39 @@ on the bench because he occupies the IR slot. Not a bug.
 Sleeper only renders lineup controls on the `/team` route — you cannot swap a
 player from `/matchup` by hand. The API does not care.
 
+## Stats: `weekly_stats`, `season_stats`, `get_player_stats`
+
+Real production data — snaps, targets, carries, red-zone looks — lives here and
+nowhere else. Three things about it are undocumented and all three bite.
+
+**`category` is `"stat"`, singular.** Not `"stats"`, despite the query name.
+
+**`order_by` is `String!` — required.** So is `category`. The obvious minimal
+query, asking for one week of one sport, fails with
+`Expected type "String!", found null` rather than anything that suggests which
+argument to add. `order_by:"pts_half_ppr"` works.
+
+**Each week includes a synthetic per-team row.** Its `player_id` is
+`TEAM_<abbr>` — `TEAM_LAR` — and its stats are the entire offence's: 48 targets,
+39 carries. It is not a player.
+
+That last one is the dangerous one, because it fails quietly in both
+directions. Summing every row to compute a team total counts the offence
+twice, halving every share; a receiver with 16 targets then reports a 9%
+opportunity share, which is wrong to anyone who watches football and is
+invisible to any assertion that shares lie between 0 and 1. Leaving the row in
+a player list produces a phantom player who out-targets everyone.
+
+Prefer the team row AS the denominator rather than merely excluding it. It is
+Sleeper's own total, so shares stay correct even when the query is filtered to
+one position — whereas summing players only works if every position came back,
+and a `positions:"WR"` query that divides by its own sum yields shares above
+1.0.
+
+One more: a player's team in the stats row is where he played THAT WEEK. The
+player dictionary holds where he plays today. For any past-season query they
+differ, and the dictionary is the wrong source.
+
 ## Things that vary by league and must be read, not assumed
 
 | Field | Why it matters |
