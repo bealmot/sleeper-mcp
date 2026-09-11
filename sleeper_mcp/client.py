@@ -182,8 +182,46 @@ async def rest(path: str):
         return r.json()
 
 
+# In-process caches. Sleeper's player dictionary is ~5 MB and is fetched by
+# nearly every tool; league config is fetched almost as often. Without this a
+# single conversation that calls three tools downloads 15 MB and waits for it
+# three times.
+#
+# TTLs reflect how fast each thing actually changes. The player dictionary
+# updates on news (injury tags, depth charts) — 15 minutes is well inside any
+# useful reaction window. League CONFIG (scoring, roster_positions) does not
+# change during a season at all; an hour is conservative.
+#
+# NOTHING MUTABLE IS CACHED HERE. Rosters, matchups and transactions are
+# deliberately absent: they change when a manager acts, and the reason you are
+# reading one is usually that somebody just did. A stale roster would also make
+# a write's verification read meaningless.
+_CACHE: dict = {}
+_TTL = {"players": 900.0, "league": 3600.0}
+
+
+def cache_clear() -> int:
+    """Drop cached reads. Call after anything that could invalidate them."""
+    n = len(_CACHE)
+    _CACHE.clear()
+    return n
+
+
+async def _cached(key: str, kind: str, fetch):
+    import time as _time
+    hit = _CACHE.get(key)
+    if hit and (_time.monotonic() - hit[0]) < _TTL.get(kind, 0):
+        return hit[1]
+    value = await fetch()
+    _CACHE[key] = (_time.monotonic(), value)
+    return value
+
+
 async def players() -> dict:
     """The full NFL player dictionary — about 5 MB, ~11,000 entries.
+
+    Cached for 15 minutes: it is fetched by nearly every tool and changes only
+    when news lands.
 
     CAUTION: names are NOT unique and the dictionary includes retired players.
     "Kenneth Walker" matches two entries, one of them inactive. Resolving a
@@ -192,11 +230,15 @@ async def players() -> dict:
     for the slot they are assigned to". Resolve against a ROSTER where possible,
     and always prefer ids.
     """
-    return await rest("/players/nfl")
+    return await _cached("players", "players", lambda: rest("/players/nfl"))
 
 
 async def league(lg: str | None = None) -> dict:
-    return await rest(f"/league/{league_id(lg)}")
+    """League configuration. Cached for an hour — scoring settings and roster
+    positions do not change mid-season."""
+    lid = league_id(lg)
+    return await _cached(f"league:{lid}", "league",
+                         lambda: rest(f"/league/{lid}"))
 
 
 async def state() -> dict:

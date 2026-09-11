@@ -25,8 +25,9 @@ from __future__ import annotations
 
 import datetime as dt
 
-from .client import (ConfigError, current_week, gql, league, league_id, mcp,
-                     players, require_writes, rest, roster_id, starting_slots)
+from .client import (ConfigError, cache_clear, current_week, gql, league,
+                     league_id, mcp, players, require_writes, rest, roster_id,
+                     starting_slots)
 
 
 async def _my(lg: str, rid: int) -> dict:
@@ -110,6 +111,9 @@ async def set_lineup(players_in_slot_order: list[str], league_id_: str = "",
         return f"DRY RUN — nothing sent.\n  {listing}\n\n  Call again with confirm=True."
 
     require_writes("set_lineup")
+    # A write can invalidate cached reads. Clearing is cheap; verifying against
+    # a stale cache is not — that is how a check confirms the pre-write state.
+    cache_clear()
     await gql(
         "mutation($r:Int!,$lg:Snowflake!,$leg:Int!,$rid:Int!,$s:[String]){"
         "update_matchup_leg(round:$r,leg:$leg,league_id:$lg,roster_id:$rid,"
@@ -176,6 +180,7 @@ async def waiver_claim(add_player: str, drop_player: str, bid: int = 0,
         return f"DRY RUN — nothing sent.\n{plan}\n\n  Call again with confirm=True."
 
     require_writes("waiver_claim")
+    cache_clear()
     d = await gql(
         "mutation($lg:Snowflake!,$ka:[String],$va:[Int],$kd:[String],"
         "$vd:[Int],$ks:[String],$vs:[Int]){submit_waiver_claim(league_id:$lg,"
@@ -237,6 +242,7 @@ async def set_ir(player_names: list[str], league_id_: str = "",
         return f"DRY RUN — nothing sent.\n{plan}\n\n  Call again with confirm=True."
 
     require_writes("set_ir")
+    cache_clear()
     await gql("mutation($lg:Snowflake!,$rid:Int!,$r:[String]){"
               "roster_update_reserve(league_id:$lg,roster_id:$rid,reserve:$r)"
               "{roster_id reserve}}",
@@ -286,6 +292,7 @@ async def trade_block(add: list[str] | None = None,
                 f"whole league. Call again with confirm=True.")
 
     require_writes("trade_block")
+    cache_clear()
     for p in a:
         await gql('mutation{add_league_player_trade_block(player_id:"%s",'
                   'league_id:"%s"){roster_id}}' % (p, lg), auth=True)
@@ -347,6 +354,7 @@ async def propose_trade(give_players: list[str], receive_players: list[str],
                 f"real person. Call again with confirm=True.")
 
     require_writes("propose_trade")
+    cache_clear()
     d = await gql(
         "mutation($lg:Snowflake!,$ka:[String],$va:[Int],$kd:[String],"
         "$vd:[Int],$wb:[String]){propose_trade(league_id:$lg,k_adds:$ka,"
@@ -380,6 +388,7 @@ async def respond_trade(transaction_id: str, response: str, leg: int = 0,
                 f"Accepting may execute immediately. Call again with "
                 f"confirm=True.")
     require_writes("respond_trade")
+    cache_clear()
     op = "accept_trade" if resp == "accept" else "reject_trade"
     await gql("mutation($leg:Int!,$lg:Snowflake!,$tx:Snowflake!){"
               f"{op}(leg:$leg,league_id:$lg,transaction_id:$tx)"
@@ -420,6 +429,7 @@ async def pickem_pick(game_id: str, team: str, week: int = 0,
                 f"Call again with confirm=True.")
 
     require_writes("pickem_pick")
+    cache_clear()
     await gql(
         "mutation($p:InputPickemPick!,$lg:Snowflake!,$rid:Int!,$leg:String!,"
         "$old:InputPickemPick){make_pickem_pick(pick:$p,league_id:$lg,"
@@ -447,6 +457,7 @@ async def watch_player(player_name: str, unwatch: bool = False) -> str:
     """
     from .reads import _ambiguous, _find
     require_writes("watch_player")
+    cache_clear()
     P = await players()
     hits = _find(P, player_name)
     if len(hits) != 1:
