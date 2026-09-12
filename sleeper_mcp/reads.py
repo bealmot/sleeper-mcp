@@ -533,3 +533,121 @@ async def player_history(player_name: str, limit: int = 25,
                 line += f", dropping {named(m['others'])}"
         out.append(f"  {m['date']}  {wk:>4}  {m['how']:<13}{faab:<5} {line}")
     return "\n".join(out)
+
+
+@mcp.tool()
+async def transaction_search(kind: str = "", status: str = "", week: int = 0,
+                             manager: str = "", limit: int = 50,
+                             league_id_: str = "") -> str:
+    """Search the league's transactions, INCLUDING the ones that never happened.
+
+    NEEDS A TOKEN.
+
+    This is the only way to see what your league TRIED to do. Cancelled and
+    rejected trades, and cancelled waiver claims, do not appear in the ordinary
+    transaction list at all — one season here proposed 36 trades and completed
+    4, and a completed-only list contains just the four. That difference is
+    what separates a quiet league from one where nobody accepts.
+
+    IT DOES NOT REPLACE `transactions`. Compared by id over a full season, this
+    source held 61 transactions the REST one lacked, and the REST one held 16
+    this one lacks (failed waiver claims). Neither is a superset. For a
+    complete picture of a week, read both.
+
+    Args:
+        kind: Sleeper's transaction type — free_agent, waiver, trade.
+            Comma-separate for several. Blank means all.
+        status: complete, failed, cancelled, rejected. Comma-separate for
+            several. Blank means all.
+        week: Restrict to one week. 0 means the whole season.
+        manager: Restrict to one team, by display name.
+        limit: Maximum rows to PRINT. Default 50. The summary above them is
+            computed over every matching transaction, not just the printed
+            ones, so a small limit still gives a true completion rate.
+        league_id_: Override the configured league.
+    """
+    from .moves import (by_manager, outcomes, parse_draft_pick,
+                        pick_label, when)
+
+    lg = league_id(league_id_ or None)
+    owner = await _owners(lg)
+
+    # Fetch wider than we display so the summary describes the whole result
+    # rather than the first page of it. A completion rate computed over five
+    # displayed rows is not a completion rate.
+    fetch = max(1, min(max(limit, 200), 500))
+    args = [f'league_id:"{lg}"', f"limit:{fetch}"]
+    parts = lambda s: [p.strip() for p in s.split(",") if p.strip()]
+    if kind:
+        args.append("type_filters:[%s]"
+                    % ",".join(f'"{k}"' for k in parts(kind)))
+    if status:
+        args.append("status_filters:[%s]"
+                    % ",".join(f'"{s}"' for s in parts(status)))
+    if week:
+        args.append(f"leg_filters:[{int(week)}]")
+    if manager:
+        want = manager.strip().lower()
+        rid = next((r for r, n in owner.items()
+                    if want in (n or "").lower()), None)
+        if rid is None:
+            return (f"  No manager matching {manager!r}. This league: "
+                    + ", ".join(sorted(str(n) for n in owner.values())))
+        args.append(f"roster_id_filters:[{rid}]")
+
+    q = ("{league_transactions_filtered(%s){type status leg created "
+         "roster_ids adds drops waiver_budget draft_picks}}" % ",".join(args))
+    rows = (await gql(q, auth=True)).get("league_transactions_filtered") or []
+    if not rows:
+        return "  Nothing matched those filters."
+
+    P = await players()
+
+    def nm(pid):
+        v = P.get(str(pid)) or {}
+        return f"{v.get('position', '?')} {v.get('full_name', pid)}"
+
+    out = [f"  {len(rows)} transaction(s)", ""]
+    summary = outcomes(rows)
+    for t, s in sorted(summary.items()):
+        detail = ", ".join(f"{k} {v}" for k, v in sorted(s["counts"].items()))
+        out.append(f"  {t:12} {s['complete']:3}/{s['total']:<3} completed "
+                   f"({s['rate'] * 100:3.0f}%)   {detail}")
+    out.append("")
+
+    for r in rows[:limit]:
+        by = ", ".join(owner.get(x, f"roster {x}")
+                       for x in (r.get("roster_ids") or []))
+        bid = r.get("waiver_budget")
+        out.append(f"  {when(r.get('created'))}  wk{r.get('leg') or '?':<3} "
+                   f"{r.get('type', '?'):11} {r.get('status', '?'):10} {by}"
+                   + (f"  ${bid}" if bid else ""))
+        adds, drops = r.get("adds") or {}, r.get("drops") or {}
+        if r.get("type") == "trade":
+            # A TRADE PUTS EVERY PLAYER IN BOTH adds AND drops, because he
+            # moves between rosters. Printing the two lists separately shows
+            # each player twice, once arriving and once leaving, which reads
+            # as though twice as many players moved. Group by destination.
+            dest: dict = {}
+            for pid, rid in adds.items():
+                dest.setdefault(rid, []).append(nm(pid))
+            for raw in (r.get("draft_picks") or []):
+                pk = parse_draft_pick(raw)
+                if pk:
+                    dest.setdefault(pk.get("owner_id"), []).append(
+                        pick_label(pk, owner))
+            for rid, got in dest.items():
+                out.append(f"        {owner.get(rid, f'roster {rid}')[:18]:18} "
+                           f"gets {', '.join(got)}")
+        else:
+            for pid in adds:
+                out.append(f"        + {nm(pid)}")
+            for pid in drops:
+                out.append(f"        - {nm(pid)}")
+
+    if not manager and len(rows) > 5:
+        out.append("")
+        out.append(f"  {'team':22} {'involved':>9} {'completed':>10}")
+        for name, total, done in by_manager(rows, owner)[:12]:
+            out.append(f"  {name[:22]:22} {total:9} {done:10}")
+    return "\n".join(out)

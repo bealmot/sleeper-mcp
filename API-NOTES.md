@@ -117,6 +117,51 @@ on the bench because he occupies the IR slot. Not a bug.
 Sleeper only renders lineup controls on the `/team` route — you cannot swap a
 player from `/matchup` by hand. The API does not care.
 
+## `league_transactions_filtered` — and what REST hides
+
+Authenticated. `league_id` is required; `type_filters`, `status_filters`,
+`leg_filters` and `roster_id_filters` are all lists and compose as you would
+expect.
+
+**It shows transactions that never happened, and REST does not.** Compared over
+one full season of the same league:
+
+| | REST | GraphQL |
+|---|---|---|
+| free_agent / complete | 207 | 207 |
+| waiver / complete | 62 | 62 |
+| trade / complete | 4 | 4 |
+| trade / cancelled | **0** | 20 |
+| trade / rejected | **0** | 12 |
+| waiver / cancelled | **0** | 29 |
+| waiver / failed | 29 | 13 |
+
+Completed transactions agree exactly. Everything else does not, and **neither
+source is a superset**: by transaction id, 61 were in GraphQL only and 16 in
+REST only (failed waiver claims), with no id carrying a different status in the
+two. To see a week completely you need both.
+
+The gap matters because it changes what the data means. That league proposed
+36 trades and completed 4; a completed-only list contains the four and cannot
+distinguish a quiet league from one where nobody accepts.
+
+**A trade puts every player in BOTH `adds` and `drops`,** since he moves
+between rosters. Printing the two lists separately shows each player twice,
+once arriving and once leaving. Group by destination instead.
+
+**Traded draft picks come back as COMMA-SEPARATED STRINGS here** and as objects
+from REST. Decoded from both forms of one transaction:
+
+```
+GraphQL  "9,2026,6,5,9"
+REST     {roster_id: 9, season: "2026", round: 6, owner_id: 5,
+          previous_owner_id: 9}
+```
+
+so the order is `roster_id, season, round, owner_id, previous_owner_id`. Code
+expecting the object drops the string silently, and a trade whose other half
+was a pick then renders as one side receiving nothing.
+
 ## Keepers: two fields, different answers
 
 `roster.keepers` and the draft's `is_keeper` picks are NOT the same thing, and

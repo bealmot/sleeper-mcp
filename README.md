@@ -140,7 +140,7 @@ executes immediately with no veto window.
 
 **Reads** — `roster` · `matchup` · `standings` · `transactions` · `pending` ·
 `player_news` · `player_outlook` · `trending` · `draft_picks` · `chat` ·
-`watched_players` · `pickem_status` · `league_info` · `find_my_leagues` · `player_history` · `keepers` ·
+`watched_players` · `pickem_status` · `league_info` · `find_my_leagues` · `player_history` · `keepers` · `transaction_search` ·
 `auth_status` · `setup_token`
 
 **Analysis** — `waiver_targets` · `bye_outlook` · `playoff_odds` · `matchup_odds` · `schedule_strength` · `playoff_bracket` · `usage` · `breakouts`
@@ -179,6 +179,12 @@ A few worth calling out:
   of their team's targets and carries, which is how a back who went from 40% of
   snaps to 75% surfaces while he is still available, rather than after the
   projections catch up and someone else claims him.
+- **`transaction_search`** is the only way to see what your league *tried* to
+  do. Cancelled and rejected trades, and cancelled waiver claims, are absent
+  from the ordinary transaction list entirely — one season here proposed 36
+  trades and completed 4, and a completed-only list holds just the four. It
+  does not replace `transactions`: compared by id over a season, each source
+  held transactions the other lacked, so read both for a complete week.
 - **`keepers`** separates two things Sleeper gives the same name. The draft's
   `is_keeper` picks are the record of who was actually kept, and the round they
   cost; `roster.keepers` is a forward designation for the next draft. In a live

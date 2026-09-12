@@ -112,3 +112,101 @@ def churn(moves: list[dict]) -> dict:
         "trades": sum(1 for m in moves if m["kind"] == TRADED),
         "rosters": len(rosters),
     }
+
+
+# --- outcomes ---------------------------------------------------------------
+
+# Statuses Sleeper uses. Only `complete` actually happened; the rest are the
+# interesting part, because they are what a league TRIED to do.
+COMPLETE = "complete"
+
+
+def outcomes(rows: list[dict]) -> dict:
+    """Counts by type and status, with the completion rate per type.
+
+    The rate is the point. A league that proposed 36 trades and completed 4 is
+    not a quiet league, it is a league where nobody accepts — and a list of
+    completed transactions cannot tell those apart, because it contains only
+    the four.
+    """
+    by_type: dict[str, dict[str, int]] = {}
+    for r in rows or []:
+        t = r.get("type") or "?"
+        s = r.get("status") or "?"
+        by_type.setdefault(t, {})
+        by_type[t][s] = by_type[t].get(s, 0) + 1
+    out = {}
+    for t, counts in by_type.items():
+        total = sum(counts.values())
+        done = counts.get(COMPLETE, 0)
+        out[t] = {"counts": counts, "total": total, "complete": done,
+                  "rate": (done / total) if total else 0.0}
+    return out
+
+
+def by_manager(rows: list[dict], names: dict) -> list[tuple]:
+    """Who initiated what, and how much of it stuck.
+
+    A transaction lists every roster it touches, so a trade counts for both
+    sides. That is deliberate: "was involved in" is the answerable question,
+    while "who proposed it" is not reliably in the data.
+    """
+    tally: dict[int, dict[str, int]] = {}
+    for r in rows or []:
+        for rid in (r.get("roster_ids") or []):
+            slot = tally.setdefault(rid, {"total": 0, "complete": 0})
+            slot["total"] += 1
+            if r.get("status") == COMPLETE:
+                slot["complete"] += 1
+    return sorted(((names.get(rid, f"roster {rid}"), v["total"], v["complete"])
+                   for rid, v in tally.items()),
+                  key=lambda x: -x[1])
+
+
+# --- traded draft picks -----------------------------------------------------
+
+# GraphQL returns traded picks as COMMA-SEPARATED STRINGS, while REST returns
+# objects for the same trade. Field order was read off both forms of one
+# transaction rather than guessed:
+#
+#   GraphQL "9,2026,6,5,9"
+#   REST    {roster_id: 9, season: "2026", round: 6, owner_id: 5,
+#            previous_owner_id: 9}
+#
+# A renderer that expects the object silently drops the string, and a trade
+# whose other half was a pick then displays as one side receiving nothing.
+PICK_FIELDS = ("roster_id", "season", "round", "owner_id", "previous_owner_id")
+
+
+def parse_draft_pick(value) -> dict | None:
+    """Normalise a traded pick from either form. None if unreadable."""
+    if isinstance(value, dict):
+        return {k: value.get(k) for k in PICK_FIELDS}
+    if not isinstance(value, str):
+        return None
+    parts = [p.strip() for p in value.split(",")]
+    if len(parts) < len(PICK_FIELDS):
+        return None
+    out = {}
+    for key, raw in zip(PICK_FIELDS, parts):
+        if key == "season":
+            out[key] = raw
+        else:
+            try:
+                out[key] = int(raw)
+            except ValueError:
+                out[key] = None
+    return out
+
+
+def pick_label(pick: dict, names: dict | None = None) -> str:
+    """"2026 round 6 (originally Juniper)" — whose pick it started as matters.
+
+    A sixth-rounder from a team that finished last is not the same asset as one
+    from the champion, and only `roster_id` says which it is.
+    """
+    names = names or {}
+    origin = pick.get("roster_id")
+    who = names.get(origin)
+    tail = f" (originally {who})" if who else ""
+    return f"{pick.get('season')} round {pick.get('round')}{tail}"

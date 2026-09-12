@@ -6,8 +6,10 @@ DROP and someone else is the point of the move. That row is the whole reason
 this module exists, and it is the one a hand-written fixture leaves out.
 """
 
-from sleeper_mcp.moves import (ADDED, DRAFTED, DROPPED, TRADED, churn,
-                               classify, history, when)
+from sleeper_mcp.moves import (ADDED, DRAFTED, DROPPED, TRADED,
+                               by_manager, churn, classify, history,
+                               outcomes, parse_draft_pick, pick_label,
+                               when)
 
 # Real shapes. 9754 is the player asked about throughout.
 CLAIMED = {"type": "waiver", "status": "complete", "leg": 2,
@@ -130,3 +132,86 @@ def test_a_team_defence_in_the_drop_list_does_not_break_anything():
 def test_a_normal_draft_is_still_a_draft():
     c = classify(DRAFT, "9754")
     assert c["kind"] == DRAFTED and c["how"] == "draft"
+
+
+# --- outcomes ---------------------------------------------------------------
+# The counts here are real: one season of this league proposed 36 trades and
+# completed 4. REST shows only those 4, so a completed-transaction list cannot
+# distinguish a quiet league from one where nobody accepts.
+
+def _row(t, s, rosters=(1,)):
+    return {"type": t, "status": s, "roster_ids": list(rosters)}
+
+
+def test_completion_rate_is_per_type():
+    rows = ([_row("trade", "complete")] * 4 + [_row("trade", "cancelled")] * 20
+            + [_row("trade", "rejected")] * 12
+            + [_row("waiver", "complete")] * 62)
+    o = outcomes(rows)
+    assert o["trade"]["total"] == 36 and o["trade"]["complete"] == 4
+    assert abs(o["trade"]["rate"] - 4 / 36) < 1e-9
+    assert o["waiver"]["rate"] == 1.0
+
+
+def test_no_rows_is_not_a_division_by_zero():
+    assert outcomes([]) == {}
+    assert outcomes(None) == {}
+
+
+def test_unknown_type_and_status_are_kept_not_dropped():
+    o = outcomes([{"type": None, "status": None, "roster_ids": []}])
+    assert o["?"]["counts"]["?"] == 1
+
+
+def test_a_trade_counts_for_both_sides():
+    """roster_ids holds every team a transaction touched."""
+    rows = [_row("trade", "complete", (5, 9)), _row("waiver", "failed", (5,))]
+    got = dict((n, (t, c)) for n, t, c in by_manager(rows, {5: "Alder",
+                                                           9: "Juniper"}))
+    assert got["Alder"] == (2, 1)
+    assert got["Juniper"] == (1, 1)
+
+
+def test_managers_are_ordered_by_activity():
+    rows = [_row("waiver", "complete", (9,))] * 3 + [_row("waiver", "complete", (5,))]
+    assert [n for n, _t, _c in by_manager(rows, {5: "Alder", 9: "Juniper"})][0] \
+        == "Juniper"
+
+
+# --- traded draft picks -----------------------------------------------------
+# GraphQL sends a pick as a comma-separated STRING; REST sends an object for
+# the same trade. Decoded by reading both forms of one real transaction, not by
+# guessing at the field order. A renderer expecting the object drops the string
+# silently, and the trade then shows one side receiving nothing.
+
+def test_the_string_form_decodes_to_the_object_form():
+    """"9,2026,6,5,9" is the trade REST describes as the dict below."""
+    from_string = parse_draft_pick("9,2026,6,5,9")
+    from_rest = parse_draft_pick({"round": 6, "season": "2026", "roster_id": 9,
+                                  "owner_id": 5, "previous_owner_id": 9})
+    assert from_string == from_rest
+    assert from_string["roster_id"] == 9      # whose pick it originally was
+    assert from_string["owner_id"] == 5       # who holds it after the trade
+    assert from_string["round"] == 6
+    assert from_string["season"] == "2026"
+
+
+def test_a_pick_is_never_silently_dropped():
+    assert parse_draft_pick("9,2026,6,5,9") is not None
+
+
+def test_unreadable_shapes_return_none_rather_than_a_wrong_pick():
+    for bad in (None, 42, "", "9,2026", ["9", "2026"]):
+        assert parse_draft_pick(bad) is None
+
+
+def test_a_malformed_number_does_not_crash_the_whole_trade():
+    pk = parse_draft_pick("x,2026,6,5,9")
+    assert pk["roster_id"] is None and pk["round"] == 6
+
+
+def test_the_label_names_whose_pick_it_originally_was():
+    """A 6th from the last-placed team is not a 6th from the champion."""
+    pk = parse_draft_pick("9,2026,6,5,9")
+    assert pick_label(pk, {9: "Juniper"}) == "2026 round 6 (originally Juniper)"
+    assert pick_label(pk, {}) == "2026 round 6"
