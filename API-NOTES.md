@@ -257,6 +257,19 @@ query, asking for one week of one sport, fails with
 `Expected type "String!", found null` rather than anything that suggests which
 argument to add. `order_by:"pts_half_ppr"` works.
 
+**`season_stats` gives whole-season totals in one call**, with `gp` (games
+played) and `week: null` on every row. One request replaces eighteen, and `gp`
+is what makes a per-game rate possible — season totals reward availability as
+much as quality, so a player who missed five games ranks below a worse one who
+did not.
+
+**A POSITION FILTER STRIPS THE TEAM ROWS.** Measured on one season:
+`positions:["WR"]` returns 1,364 rows and **zero** `TEAM_` entries, against
+8,248 rows and 32 team rows unfiltered. Since the team rows are the
+denominators, filtering at the query and then computing shares divides a
+receiver's targets by the WR-only total and inflates every share. Fetch
+unfiltered and filter locally.
+
 **Each week includes a synthetic per-team row.** Its `player_id` is
 `TEAM_<abbr>` — `TEAM_LAR` — and its stats are the entire offence's: 48 targets,
 39 carries. It is not a player.

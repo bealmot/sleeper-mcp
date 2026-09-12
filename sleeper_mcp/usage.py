@@ -208,3 +208,131 @@ async def breakouts(position: str = "", weeks: int = 4, limit: int = 12,
         out.append("  share of a team's work is structurally higher than a "
                    "receiver's. Pass position= to compare like with like.")
     return "\n".join(out)
+
+
+# Curated metrics for season_leaders. Raw Sleeper keys work too, but these are
+# the ones worth ranking by, and several are rates this module computes rather
+# than fields Sleeper returns.
+METRICS = {
+    "points": "pts_half_ppr",
+    "targets": "rec_tgt",
+    "carries": "rush_att",
+    "opportunity": None,          # targets + carries, computed
+    "target_share": None,         # computed against the team row
+    "opp_share": None,
+    "snap_share": None,
+    "rec_yards": "rec_yd",
+    "rush_yards": "rush_yd",
+    "red_zone": None,
+}
+
+
+async def _season_rows(season: str) -> list[dict]:
+    """Every player's season totals, UNFILTERED BY POSITION.
+
+    The position filter strips the synthetic per-team rows: asking for WR
+    returns 1,364 rows and zero TEAM_ entries, against 8,248 rows and 32 team
+    rows unfiltered. Those team rows are the denominators, so filtering at the
+    query and then computing shares divides a receiver's targets by the WR-only
+    total and inflates every share. Filter locally instead.
+
+    `week` is None on a season aggregate, and shares.team_totals keys its
+    buckets by (team, week) while skipping rows with no week — so these are
+    stamped week 0. One bucket per team is exactly right for a season.
+    """
+    q = ('{season_stats(sport:"nfl",season:"%s",season_type:"regular",'
+         'category:"%s",order_by:"%s"){player_id team stats}}'
+         % (season, CATEGORY, ORDER_BY))
+    rows = (await gql(q)).get("season_stats") or []
+    return [{**r, "week": 0} for r in rows]
+
+
+@mcp.tool()
+async def season_leaders(position: str = "", metric: str = "points",
+                         per_game: bool = True, min_games: int = 4,
+                         limit: int = 15, season: str = "") -> str:
+    """Season-long leaders, by RATE rather than accumulation by default.
+
+    Season totals are the most misleading number in fantasy: they reward
+    availability as much as quality, so a player who missed five games ranks
+    below a worse one who did not. Ranking per game separates those, and games
+    played is shown either way so the trade-off stays visible.
+
+    Args:
+        position: QB, RB, WR, TE. Blank means all skill positions.
+        metric: points, targets, carries, opportunity, target_share, opp_share,
+            snap_share, rec_yards, rush_yards, red_zone — or a raw Sleeper stat
+            key.
+        per_game: Divide counting stats by games played. Default True. Shares
+            are already rates and are unaffected.
+        min_games: Ignore players below this many games. Default 4 — a rate
+            over one game is not a rate.
+        limit: How many to list. Default 15.
+        season: Defaults to the most recent completed season.
+    """
+    from .shares import collect
+
+    szn, through, _cur = await _completed(season or None)
+    if not season and through < 1:
+        szn = str(int(szn) - 1)          # nothing finished this year yet
+
+    P, rows = await asyncio.gather(players(), _season_rows(szn))
+    if not rows:
+        return f"  No season stats for {szn}."
+
+    by_player = collect(rows)            # drops TEAM_ rows, keeps them as totals
+    # Index once. Scanning `rows` inside the loop is quadratic over 8,000+ rows.
+    raw = {str(r.get("player_id")): (r.get("stats") or {}) for r in rows}
+    wanted = ({position.upper()} if position
+              else {"QB", "RB", "WR", "TE"})
+    key = METRICS.get(metric, metric)
+
+    table = []
+    for pid, weeks in by_player.items():
+        v = P.get(pid) or {}
+        if v.get("position") not in wanted:
+            continue
+        w = weeks[0]
+        st = raw.get(pid, {})
+        gp = float(st.get("gp") or 0)
+        if gp < min_games:
+            continue
+
+        if metric in ("target_share", "opp_share", "snap_share"):
+            value, rate = w.get(metric), True
+        elif metric == "opportunity":
+            value, rate = w["opportunity"], False
+        elif metric == "red_zone":
+            value, rate = w["red_zone"], False
+        else:
+            value, rate = float(st.get(key) or 0), False
+        if value is None:
+            continue
+        shown = (value / gp) if (per_game and not rate and gp) else value
+        table.append((shown, value, gp, pid, v, w))
+
+    if not table:
+        return (f"  Nothing matched — metric {metric!r} may not exist. Known: "
+                + ", ".join(sorted(METRICS)))
+    table.sort(key=lambda t: -t[0])
+
+    is_share = metric.endswith("_share")
+    unit = "" if is_share else ("/g" if per_game else "")
+    head = [f"  {szn} {position or 'skill'} leaders by {metric}{unit}"
+            f"   (min {min_games} games)"]
+    if per_game and not is_share:
+        head.append("  Ranked PER GAME — season totals reward availability as "
+                    "much as quality.")
+    out = head + ["",
+                  f"  {'player':22} {'pos':>3} {'tm':>3} {'gp':>4} "
+                  f"{metric[:13] + unit:>15} {'total':>9} {'tgt%':>6} "
+                  f"{'snap%':>6}"]
+    for shown, total, gp, pid, v, w in table[:limit]:
+        fmt = f"{shown * 100:14.1f}%" if is_share else f"{shown:15.1f}"
+        tot = "-" if is_share else f"{total:9.0f}"
+        ts = f"{w['target_share'] * 100:5.0f}%" if w["target_share"] is not None else "    -"
+        ss = f"{w['snap_share'] * 100:5.0f}%" if w["snap_share"] is not None else "    -"
+        out.append(f"  {(v.get('full_name') or pid)[:22]:22} "
+                   f"{v.get('position', '?'):>3} {w.get('team') or '?':>3} "
+                   f"{gp:4.0f} {fmt} {tot:>9} {ts:>6} {ss:>6}")
+    return "\n".join(out)

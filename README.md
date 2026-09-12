@@ -143,7 +143,7 @@ executes immediately with no veto window.
 `watched_players` · `pickem_status` · `league_info` · `find_my_leagues` · `player_history` · `keepers` · `transaction_search` · `pickem_consensus` ·
 `auth_status` · `setup_token`
 
-**Analysis** — `waiver_targets` · `bye_outlook` · `playoff_odds` · `matchup_odds` · `schedule_strength` · `playoff_bracket` · `usage` · `breakouts`
+**Analysis** — `waiver_targets` · `bye_outlook` · `playoff_odds` · `matchup_odds` · `schedule_strength` · `playoff_bracket` · `usage` · `breakouts` · `season_leaders`
 
 **Writes** — `set_lineup` · `waiver_claim` · `cancel_claim` · `set_ir` ·
 `trade_block` · `propose_trade` · `respond_trade` · `pickem_pick` ·
@@ -170,6 +170,12 @@ A few worth calling out:
   projection or generic value over replacement. A high-projection player at a
   position you are already deep in correctly prices at zero. "Nothing improves
   your lineup this week" is a real answer and it will give it.
+- **`season_leaders`** ranks a season **per game** by default, because season
+  totals are the most misleading number in fantasy: they reward availability as
+  much as quality, and a player who missed five games lands below a worse one
+  who did not. Games played is shown either way so the trade-off stays visible,
+  and it ranks by rate metrics — target share, snap share, opportunity share —
+  as readily as by points.
 - **`usage`** and **`breakouts`** are the only tools here that read what
   players actually *did* — snap share, target share, red-zone looks — rather
   than what they are projected to do. That distinction is the point. A

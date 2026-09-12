@@ -183,3 +183,30 @@ def test_team_comes_from_the_stat_row_not_todays_roster():
     weeks[0]["team"] = "KC"
     weeks[1]["team"] = "KC"
     assert trend(weeks)["team"] == "KC"
+
+
+# --- season aggregates ------------------------------------------------------
+# season_stats returns one row per player for the WHOLE season, with `week`
+# None. team_totals buckets by (team, week) and skips rows with no week, so
+# season rows are stamped week 0 before they reach it — one bucket per team,
+# which is exactly right for a season.
+
+def test_season_rows_need_a_week_stamp_to_bucket_at_all():
+    """Unstamped season rows are skipped entirely and every share is None."""
+    unstamped = [{"player_id": "TEAM_LAR", "team": "LAR", "week": None,
+                  "stats": {"rec_tgt": 581, "rush_att": 465}},
+                 {"player_id": "9493", "team": "LAR", "week": None,
+                  "stats": {"rec_tgt": 166}}]
+    assert team_totals(unstamped) == {}
+    assert collect(unstamped)["9493"][0]["target_share"] is None
+
+
+def test_stamped_season_rows_give_correct_full_season_shares():
+    stamped = [{"player_id": "TEAM_LAR", "team": "LAR", "week": 0,
+                "stats": {"rec_tgt": 581, "rush_att": 465}},
+               {"player_id": "9493", "team": "LAR", "week": 0,
+                "stats": {"rec_tgt": 166, "off_snp": 675, "tm_off_snp": 990}}]
+    u = collect(stamped)["9493"][0]
+    assert abs(u["target_share"] - 166 / 581) < 1e-9        # 28.6%
+    assert abs(u["opp_share"] - 166 / 1046) < 1e-9
+    assert abs(u["snap_share"] - 675 / 990) < 1e-9
