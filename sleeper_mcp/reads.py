@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import datetime as dt
 
-from .client import (current_week, gql, league, league_id, mcp, players,
-                     rest, roster_id, scored)
+from .client import (AuthError, ConfigError, current_week, gql, league,
+                     league_id, mcp, players, rest, roster_id, scored)
 
 
 async def _owners(lg: str) -> dict:
@@ -125,14 +125,21 @@ async def matchup(league_id_: str = "", week: int = 0) -> str:
     wk = week or await current_week()
     owner = await _owners(lg)
 
-    legs, projected = [], True
+    legs, projected, why = [], True, ""
     try:
         d = await gql('{matchup_legs(round:%d,league_id:"%s")'
                       '{roster_id matchup_id proj_points}}' % (wk, lg),
                       auth=True)
         legs = d.get("matchup_legs") or []
-    except Exception:
+    except Exception as e:
+        # WHY it failed decides what to tell the user. A blanket "projections
+        # need SLEEPER_TOKEN" is a confident wrong diagnosis when the cause was
+        # a network blip or a bad query, and sends someone to fetch a token
+        # they already have.
         projected = False
+        why = ("projections need SLEEPER_TOKEN"
+               if isinstance(e, (AuthError, ConfigError))
+               else f"projections unavailable ({e.__class__.__name__})")
         legs = [{"roster_id": m.get("roster_id"),
                  "matchup_id": m.get("matchup_id"), "proj_points": None}
                 for m in (await rest(f"/league/{lg}/matchups/{wk}") or [])]
@@ -140,8 +147,7 @@ async def matchup(league_id_: str = "", week: int = 0) -> str:
     by_m: dict = {}
     for l in legs:
         by_m.setdefault(l.get("matchup_id"), []).append(l)
-    out = [f"Week {wk}" + ("" if projected else
-                           "  (pairings only — projections need SLEEPER_TOKEN)")]
+    out = [f"Week {wk}" + ("" if projected else f"  (pairings only — {why})")]
     for _, pair in sorted(by_m.items(), key=lambda kv: kv[0] or 0):
         out.append("  " + " vs ".join(
             f"{owner.get(x['roster_id'], '?')}"
@@ -304,8 +310,12 @@ async def draft_picks(league_id_: str = "") -> str:
             d = await gql('{roster_draft_picks_by_owner(league_id:"%s",'
                           'owner_roster_id:"%d"){season round roster_id}}'
                           % (lg, rid), auth=True)
+        except (AuthError, ConfigError) as e:
+            return f"Needs a token: {e}"
         except Exception as e:
-            return f"Needs a token ({e.__class__.__name__}): {str(e)[:80]}"
+            # Not an auth problem, so do not send the reader after a token.
+            return (f"Could not read draft picks ({e.__class__.__name__}: "
+                    f"{str(e)[:100]}).")
         for p in (d.get("roster_draft_picks_by_owner") or []):
             out.append(f"  {owner[rid]:16} holds {p['season']} round "
                        f"{p['round']} — originally "
@@ -404,6 +414,8 @@ async def pickem_status(week: int = 0, pickem_league: str = "",
                         pickem_roster: int = 0) -> str:
     """Your pick'em entry: which picks are in, and which are missing.
 
+    NEEDS A TOKEN.
+
     Pick'em has NO web interface — it is mobile-app only — so this is often the
     only way to check an entry from a desktop. Comparing `num_expected_picks`
     against the number of picks made is the check that matters; a missing pick
@@ -424,9 +436,14 @@ async def pickem_status(week: int = 0, pickem_league: str = "",
             "(or the arguments). Pick'em lobbies do not appear in the normal "
             "league list; the ids come from the app's share link.")
     wk = week or await current_week()
+    # AUTHENTICATED. This was sent without a token and returned a bare
+    # "Unauthorized" for everyone — pick'em reads are not public the way most
+    # league reads are. Found by calling every tool in one pass rather than by
+    # any static check, because nothing in the source says an endpoint needs a
+    # token until Sleeper refuses it.
     d = await gql('{get_pickem_legs(league_id:"%s",roster_id:%d)'
                   '{leg_id status num_expected_picks picks tiebreaker}}'
-                  % (lg, rid))
+                  % (lg, rid), auth=True)
     legs = d.get("get_pickem_legs") or []
     leg = next((l for l in legs if str(l.get("leg_id", "")).endswith(f":{wk}")),
                legs[0] if legs else None)

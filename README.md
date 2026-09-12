@@ -296,17 +296,31 @@ Checks run **locally** — there is no CI service and no Actions workflow, on
 purpose:
 
 ```bash
-python3 scripts/check.py                 # run them
+uv venv && uv pip install -e '.[dev]'    # once — the gate needs pytest+pyflakes
+python3 scripts/check.py                 # run the checks
 python3 scripts/check.py --fresh         # + resolve deps in a clean venv (slow)
 git config core.hooksPath .githooks      # once, to run them before every push
+python scripts/smoke.py --season 2025    # call every read tool for real
 ```
 
-Six checks, standard library only: syntax, secrets, tool docstrings, the
-real-money boundary, pytest, and a **privacy** scan that fails if a private
-league's ids, team names or local paths appear in a committed file. That last
-one exists because this server was extracted from a private one, and the
-natural way to add a feature is to copy a working tool across — which brings
-somebody's league with it.
+Seven checks: syntax, **names** (pyflakes — a name used but never imported is
+a NameError nothing else catches), secrets, tool docstrings, the real-money
+boundary, pytest, and a **privacy** scan that fails if a private league's ids,
+team names or local paths appear in a committed file. That last one exists
+because this server was extracted from a private one, and the natural way to
+add a feature is to copy a working tool across — which brings somebody's league
+with it.
+
+`check.py` refuses to report green over tests it could not run. A module that
+fails to import is skipped by pytest while the summary still says "passed", so
+the gate was quietly running 114 of 142 tests; it now names any module that did
+not run and fails.
+
+**`scripts/smoke.py` is the other half.** The pure modules are covered by unit
+tests; the tool layer is not, and its failure modes — a format string on a
+None, an endpoint that turns out to need a token — are invisible to every
+static check. It needs a real league, so it is not part of the gate. Its first
+run found `pickem_status` returning "Unauthorized" for every user.
 
 `--fresh` is the one worth running before a release. Every other check runs
 against whatever is already installed here, so a dependency that no longer

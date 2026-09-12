@@ -87,10 +87,11 @@ async def _kept_in_draft(lg_cfg: dict, P: dict, owner: dict) -> list[tuple]:
     did = lg_cfg.get("draft_id")
     if not did:
         return []
-    try:
-        picks = await rest(f"/draft/{did}/picks") or []
-    except Exception:
-        return []
+    # NOT wrapped in a blanket except. Swallowing a fetch failure here returned
+    # an empty list, which the caller prints as "(none, or the draft has not
+    # run)" — a confident wrong answer about who was kept. A raised error is
+    # the honest outcome.
+    picks = await rest(f"/draft/{did}/picks") or []
     out = []
     for pk in picks:
         if not pk.get("is_keeper"):

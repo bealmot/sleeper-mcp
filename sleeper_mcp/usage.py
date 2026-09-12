@@ -37,18 +37,29 @@ async def _week(season: str, week: int) -> list[dict]:
     q = ('{weekly_stats(sport:"nfl",season:"%s",season_type:"%s",week:%d,'
          'category:"%s",order_by:"%s"){player_id team opponent week stats}}'
          % (season, SEASON_TYPE, week, CATEGORY, ORDER_BY))
-    try:
-        return (await gql(q)).get("weekly_stats") or []
-    except Exception:
-        return []
+    return (await gql(q)).get("weekly_stats") or []
 
 
-async def _history(season: str, through: int, weeks: int) -> list[dict]:
-    """The last `weeks` COMPLETED weeks, fetched concurrently."""
+async def _history(season: str, through: int,
+                   weeks: int) -> tuple[list[dict], list[int]]:
+    """The last `weeks` COMPLETED weeks, fetched concurrently.
+
+    Returns (rows, failed_weeks). A week that fails to fetch used to be
+    swallowed and return an empty list, which is indistinguishable from a week
+    nobody played — the trend then quietly covered fewer games than it claimed
+    and said nothing. The caller is told which weeks are missing instead.
+    """
     first = max(1, through - weeks + 1)
-    got = await asyncio.gather(*(_week(season, w)
-                                 for w in range(first, through + 1)))
-    return [r for batch in got for r in batch]
+    wanted = list(range(first, through + 1))
+    got = await asyncio.gather(*(_week(season, w) for w in wanted),
+                               return_exceptions=True)
+    rows, failed = [], []
+    for w, batch in zip(wanted, got):
+        if isinstance(batch, BaseException):
+            failed.append(w)
+        else:
+            rows.extend(batch)
+    return rows, failed
 
 
 async def _completed(season: str | None) -> tuple[str, int, str]:
@@ -69,7 +80,9 @@ async def _completed(season: str | None) -> tuple[str, int, str]:
     cur_season = str(st.get("season") or "")
     cur_week = int(st.get("week") or 0)
     if season and season != cur_season:
-        return season, 18, ""                      # a finished season: all of it
+        # 18 is the length of the modern NFL regular season. A season that
+        # ran 17 simply returns nothing for week 18, which is harmless.
+        return season, 18, ""
     return cur_season, cur_week - 1, cur_season
 
 
@@ -80,9 +93,9 @@ async def usage(player_name: str, weeks: int = 5, season: str = "") -> str:
     Snap share is the share of his own team's offensive plays he was on the
     field for. Target share is his cut of the passing game. Opportunity share
     is his share of the team's targets AND carries, so it compares a receiver
-    with a running back on one scale. All three lead fantasy points: a role changes first and the scoring
-    follows, which is why this answers "is he getting more work?" rather than
-    "did he score?"
+    with a running back on one scale. All three lead fantasy points: a role
+    changes first and the scoring follows, which is why this answers "is he
+    getting more work?" rather than "did he score?"
 
     Args:
         player_name: Full or partial name.
@@ -101,7 +114,7 @@ async def usage(player_name: str, weeks: int = 5, season: str = "") -> str:
                 f"still being played, and a week in progress is not usage.\n"
                 f"  Pass season=\"{int(szn) - 1}\" to look at last year.")
 
-    rows = await _history(szn, through, weeks)
+    rows, failed = await _history(szn, through, weeks)
     by_player = collect(rows)
     mine = by_player.get(str(pid))
     if not mine:
@@ -110,7 +123,11 @@ async def usage(player_name: str, weeks: int = 5, season: str = "") -> str:
 
     t = trend(mine)
     out = [f"  {v.get('full_name')} — {v.get('position')} {v.get('team')}"
-           f"   {szn}, {t['games']} game(s) played", "",
+           f"   {szn}, {t['games']} game(s) played"]
+    if failed:
+        out.append(f"  INCOMPLETE — week(s) {failed} could not be fetched, so "
+                   f"this is missing data, not missing usage.")
+    out += ["",
            f"  {'wk':>3} {'opp':>4} {'tgt':>4} {'car':>4} {'snap%':>6} "
            f"{'tgt%':>6} {'opp%':>6} {'rz':>3} {'pts':>6}"]
     for w in mine:
@@ -161,9 +178,10 @@ async def breakouts(position: str = "", weeks: int = 4, limit: int = 12,
                 f"still being played.\n  Pass season=\"{int(szn) - 1}\" to see "
                 f"how roles finished last year.")
 
-    P, rosters, rows = await asyncio.gather(
+    P, rosters, history = await asyncio.gather(
         players(), rest(f"/league/{lg}/rosters"),
         _history(szn, through, weeks))
+    rows, failed = history
 
     owned = {str(p) for r in (rosters or []) for p in (r.get("players") or [])}
     owned |= {str(p) for r in (rosters or []) for p in (r.get("reserve") or [])}
@@ -184,6 +202,8 @@ async def breakouts(position: str = "", weeks: int = 4, limit: int = 12,
     head = (f"  Free agents by change in role — {szn} weeks {first}-{through}"
             if have_delta else
             f"  Free agents by current role — {szn} weeks {first}-{through}")
+    if failed:
+        head += f"   INCOMPLETE: week(s) {failed} failed to fetch"
     note = ("" if have_delta else
             "  Too early for a trend: nobody has weeks on both sides of the "
             "window, so this is ranked by CURRENT share, not by change.")
@@ -194,8 +214,9 @@ async def breakouts(position: str = "", weeks: int = 4, limit: int = 12,
     for _d, _s, pid, t in ranked[:limit]:
         v = P.get(pid) or {}
         chg = f"{t['delta'] * 100:+5.0f}pp" if t["delta"] is not None else "     -"
+        team = t.get("team") or v.get("team") or "?"
         out.append(f"  {(v.get('full_name') or pid)[:22]:22} "
-                   f"{v.get('position', '?'):>3} "f"{t.get('team') or v.get('team') or '?':>3} "
+                   f"{v.get('position', '?'):>3} {team:>3} "
                    f"{t['snap_share'] * 100:5.0f}% {t['opp_share'] * 100:5.0f}% "
                    f"{chg:>6} {t['opportunity']:6.1f} {t['red_zone']:>3.0f} "
                    f"{t['points']:6.1f}")
