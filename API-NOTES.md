@@ -117,6 +117,30 @@ on the bench because he occupies the IR slot. Not a bug.
 Sleeper only renders lineup controls on the `/team` route — you cannot swap a
 player from `/matchup` by hand. The API does not care.
 
+## Drafts
+
+`GET /draft/{draft_id}/picks` gives the board, with `is_keeper` marking keepers
+and the round and pick each cost. `GET /draft/{draft_id}` gives the format —
+snake or auction, rounds, timers, roster slots.
+
+**`roster_draft_picks(league_id, season?)` lists only the EXCEPTIONS.** It
+returns picks that have CHANGED HANDS, not every pick a team holds, so an empty
+result means nothing has been traded rather than that the query failed. Asking
+for a future season with no trades yet returns `[]`.
+
+**Scoring a draft is a positional question.** Ranking every drafted player
+together by raw points and comparing with pick number looks reasonable and is
+badly wrong: quarterbacks outscore running backs and receivers by a wide margin
+in most formats, so every late quarterback comes out an enormous steal and
+every early receiver a bust. A first pass at this returned a "best picks" list
+that was nothing but quarterbacks and defences — a fact about the scoring
+system, not about anybody's drafting. Compare a pick with the players taken
+ahead of it AT THE SAME POSITION instead.
+
+Live-draft endpoints — `draft_pick_player`, `update_draft_queue`,
+`draft_nominate_player`, `draft_offers` — only do anything while a draft is
+actually running, which is one week a year.
+
 ## `roster_standings` — the table as it stood
 
 Authenticated. `roster_standings(league_id, round)` where **`round` is the

@@ -8,6 +8,7 @@ import sys
 
 from .client import mcp
 from . import discovery as _discovery  # noqa: F401
+from . import drafts as _drafts        # noqa: F401
 from . import keepers as _keepers      # noqa: F401
 from . import lineups as _lineups      # noqa: F401
 from . import playoffs as _playoffs    # noqa: F401

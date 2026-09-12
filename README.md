@@ -141,6 +141,7 @@ executes immediately with no veto window.
 **Reads** — `roster` · `matchup` · `standings` · `transactions` · `pending` ·
 `player_news` · `player_outlook` · `trending` · `draft_picks` · `chat` ·
 `watched_players` · `pickem_status` · `league_info` · `find_my_leagues` · `player_history` · `keepers` · `transaction_search` · `pickem_consensus` ·
+`draft_board` · `draft_review` · `traded_picks` ·
 `auth_status` · `setup_token`
 
 **Analysis** — `waiver_targets` · `bye_outlook` · `playoff_odds` · `matchup_odds` · `schedule_strength` · `playoff_bracket` · `standings_trend` · `usage` · `breakouts` · `season_leaders`
@@ -198,6 +199,13 @@ A few worth calling out:
   trades and completed 4, and a completed-only list holds just the four. It
   does not replace `transactions`: compared by id over a season, each source
   held transactions the other lacked, so read both for a complete week.
+- **`draft_review`** scores a completed draft by comparing each pick with the
+  players taken ahead of it **at the same position** — the eleventh quarterback
+  off the board who finishes as QB3 is +8. That qualifier is the whole tool:
+  ranking every position together by raw points makes every late quarterback a
+  steal and every early receiver a bust, which says more about the scoring
+  system than about anyone's drafting. It scores outcomes, not decisions; a
+  pick that worked and a pick that got lucky look identical from here.
 - **`keepers`** separates two things Sleeper gives the same name. The draft's
   `is_keeper` picks are the record of who was actually kept, and the round they
   cost; `roster.keepers` is a forward designation for the next draft. In a live
