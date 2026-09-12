@@ -23,11 +23,9 @@ window at all.
 
 from __future__ import annotations
 
-import datetime as dt
-
-from .client import (ConfigError, cache_clear, current_week, gql, league,
-                     league_id, mcp, players, require_writes, rest, roster_id,
-                     starting_slots)
+from .client import (ConfigError, cache_clear, current_week, gql,
+                     league_id, mcp, players, require_writes, rest,
+                     roster_id, starting_slots)
 
 
 async def _my(lg: str, rid: int) -> dict:

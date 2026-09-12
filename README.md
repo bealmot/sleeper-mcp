@@ -143,7 +143,7 @@ executes immediately with no veto window.
 `watched_players` · `pickem_status` · `league_info` · `find_my_leagues` · `player_history` · `keepers` · `transaction_search` · `pickem_consensus` ·
 `auth_status` · `setup_token`
 
-**Analysis** — `waiver_targets` · `bye_outlook` · `playoff_odds` · `matchup_odds` · `schedule_strength` · `playoff_bracket` · `usage` · `breakouts` · `season_leaders`
+**Analysis** — `waiver_targets` · `bye_outlook` · `playoff_odds` · `matchup_odds` · `schedule_strength` · `playoff_bracket` · `standings_trend` · `usage` · `breakouts` · `season_leaders`
 
 **Writes** — `set_lineup` · `waiver_claim` · `cancel_claim` · `set_ir` ·
 `trade_block` · `propose_trade` · `respond_trade` · `pickem_pick` ·
@@ -210,6 +210,12 @@ A few worth calling out:
   genuinely available from one who is merely between owners — four managers
   having tried and cut someone is information the waiver wire does not show
   you. It is one of the few reads here that needs a token.
+- **`standings_trend`** shows how the table has *moved*, week by week, with
+  each team's form and current streak. `standings` gives today's totals; Sleeper
+  also keeps the table as it stood after every finished week, and that is the
+  only record of a season's shape. A 7-6 team that has won five straight and a
+  7-6 team that has lost five are the same standings row and opposite
+  propositions in a trade.
 - **`playoff_bracket`** is the real bracket rather than a simulation, and from
   the first playoff week it replaces `playoff_odds` entirely — once the field is
   set there is nothing left to estimate. Undecided matchups name the game that

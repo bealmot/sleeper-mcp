@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 
-from .client import current_week, gql, league_id, mcp, players, rest
+from .client import gql, league_id, mcp, players, rest
 from .reads import _ambiguous, _find
 from .shares import collect, rank, trend
 

@@ -12,6 +12,7 @@ general tidiness:
   syntax        every module parses
   privacy       no personal identifiers leaked back in  <- the important one
   secrets       no tokens or keys committed
+  names         pyflakes: a name used but never imported is a NameError
   docstrings    every tool has one, because it is what the model reads
   boundaries    the real-money guard still refuses what it claims to
   tests         pytest
@@ -135,6 +136,47 @@ def check_secrets() -> bool:
                 line = text[:m.start()].count("\n") + 1
                 hits.append(f"{f.relative_to(ROOT)}:{line}  looks like {what}")
     return fail("secrets", hits) if hits else ok("secrets (none committed)")
+
+
+def check_names() -> bool:
+    """Undefined and unused names, via pyflakes.
+
+    Syntax checking does not catch a name that was used but never imported —
+    that is a NameError raised only when the line runs, so a tool nothing
+    exercises ships green. `standings_trend` did exactly that: every check
+    passed, and calling it raised NameError on `gql`.
+    """
+    py = _test_python()
+    r = subprocess.run([py, "-m", "pyflakes", str(PKG)],
+                       capture_output=True, text=True, cwd=ROOT)
+    if "No module named" in (r.stderr or ""):
+        return fail("names", [
+            "pyflakes is not installed, so undefined names are not checked.",
+            "  A name used but never imported raises only when the line runs.",
+            "",
+            "    uv pip install -e '.[dev]'",
+        ])
+    # pyflakes has no noqa support — that is flake8. This package marks its
+    # deliberate side-effect imports with `# noqa: F401` (importing a tool
+    # module IS the registration), so honour the marker the code already uses
+    # rather than rewriting working imports to satisfy a checker.
+    lines = []
+    for line in (r.stdout or "").splitlines():
+        if not line.strip():
+            continue
+        parts = line.split(":", 3)
+        if len(parts) >= 3:
+            try:
+                src = pathlib.Path(parts[0]).read_text(
+                    encoding="utf-8").splitlines()[int(parts[1]) - 1]
+                if "noqa" in src:
+                    continue
+            except (OSError, ValueError, IndexError):
+                pass
+        lines.append(line)
+    if lines:
+        return fail("names", lines[:15])
+    return ok("names (no undefined or unused)")
 
 
 def check_docstrings() -> bool:
@@ -301,7 +343,7 @@ def main() -> int:
     args = ap.parse_args()
 
     print(f"{DIM}sleeper-mcp local checks — {ROOT}{OFF}")
-    results = [check_syntax(), check_privacy(), check_secrets(),
+    results = [check_syntax(), check_names(), check_privacy(), check_secrets(),
                check_docstrings(), check_boundaries(), check_tests()]
     if args.fresh:
         results.append(check_fresh_install())

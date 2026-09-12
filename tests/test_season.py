@@ -8,8 +8,8 @@ It is a number that looks reasonable and is wrong.
 import math
 
 from sleeper_mcp.season import (  # noqa: E501
-    bracket_champion, bracket_rounds, ordinal, slot_label,
-    split_games,
+    bracket_champion, bracket_rounds, form, movement, ordinal,
+    parse_record, slot_label, split_games, streak,
     evidence_weight, league_scoring, shrink, simulate, team_strength,
     win_probability,
 )
@@ -365,3 +365,53 @@ def test_an_unplayed_final_has_no_champion_even_when_earlier_rounds_are_done():
 def test_ordinals_read_like_english():
     assert [ordinal(n) for n in (1, 2, 3, 5, 11, 13, 21)] == \
         ["1st", "2nd", "3rd", "5th", "11th", "13th", "21st"]
+
+
+# --- standings over time ----------------------------------------------------
+# `record` really is a string of results in order — "LWWWW" came back from a
+# live league sitting 4-1 in week 5.
+
+def test_a_record_string_parses_in_order():
+    assert parse_record("LWWWW") == ["L", "W", "W", "W", "W"]
+    assert len(parse_record("LWWWW")) == 5          # length is games played
+
+
+def test_junk_in_a_record_is_dropped_not_counted():
+    assert parse_record("L W W?") == ["L", "W", "W"]
+    assert parse_record("") == [] and parse_record(None) == []
+
+
+def test_ties_are_kept():
+    assert parse_record("WTL") == ["W", "T", "L"]
+
+
+def test_streak_reads_the_tail_not_the_total():
+    assert streak("LWWWW") == "W4"
+    assert streak("WWWWL") == "L1"
+    assert streak("WWW") == "W3"
+    assert streak("") == "-"
+
+
+def test_form_shows_the_most_recent_games_oldest_first():
+    assert form("WWWLLWL", n=3) == "LWL"
+    assert form("LW", n=5) == "LW"
+
+
+def test_movement_is_positive_for_climbing_the_table():
+    """Rank 1 is the top, so a FALLING number is a RISING team."""
+    hist = {1: {1: 9, 14: 3},      # climbed six places
+            2: {1: 2, 14: 8},      # fell six
+            3: {1: 5, 14: 5}}
+    moves = movement(hist)
+    assert moves[0][0] == 1 and moves[0][3] == 6
+    assert moves[-1][0] == 2 and moves[-1][3] == -6
+
+
+def test_movement_uses_the_recorded_weeks_not_week_one():
+    """A team with no week-1 entry still gets a first and last."""
+    assert movement({1: {6: 8, 12: 2}})[0][3] == 6
+
+
+def test_movement_ignores_teams_with_no_ranks_at_all():
+    assert movement({1: {}, 2: {3: None}}) == []
+    assert movement({}) == []

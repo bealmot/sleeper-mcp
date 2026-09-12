@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 
-from .client import current_week, league, league_id, mcp, rest
+from .client import current_week, gql, league, league_id, mcp, rest
 from .reads import _owners
 from .season import (bracket_champion, bracket_rounds, ordinal,
                      simulate, split_games, team_strength,
@@ -283,3 +283,90 @@ async def playoff_bracket(consolation: bool = False, previous: bool = False,
     elif not anything_played:
         out.append("  Nothing played yet.")
     return "\n".join(out).rstrip()
+
+
+@mcp.tool()
+async def standings_trend(league_id_: str = "", previous: bool = False) -> str:
+    """How the table has MOVED, week by week, not just where it stands.
+
+    NEEDS A TOKEN.
+
+    `standings` gives today's totals; Sleeper keeps the table as it stood after
+    every completed week, which is the only place the shape of a season lives.
+    A 7-6 team that has won five straight and a 7-6 team that has lost five are
+    the same row in the standings and opposite propositions in a trade.
+
+    Only COMPLETED weeks are recorded, so early in a season this is empty and
+    says so.
+
+    Args:
+        league_id_: Override the configured league.
+        previous: Follow the league back one season.
+    """
+    from .season import form, movement, streak
+
+    lg = league_id(league_id_ or None)
+    lg_cfg = await league(lg)
+    if previous:
+        prev = lg_cfg.get("previous_league_id")
+        if not prev or prev in ("0", 0):
+            return "  This league has no previous season on Sleeper."
+        lg = str(prev)
+        lg_cfg = await league(lg)
+
+    settings = lg_cfg.get("settings") or {}
+    last = int(settings.get("playoff_week_start") or 15) - 1
+    owner, wk = await asyncio.gather(_owners(lg), current_week())
+    through = last if previous else min(last, wk - 1)
+    if through < 1:
+        return (f"  No completed weeks in {lg_cfg.get('season')} yet — "
+                f"standings history starts once a week finishes.")
+
+    weeks = list(range(1, through + 1))
+    fetched = await asyncio.gather(
+        *(gql('{roster_standings(league_id:"%s",round:%d)'
+              '{roster_id rank wins losses ties points record}}' % (lg, w),
+              auth=True) for w in weeks),
+        return_exceptions=True)
+
+    history: dict = {}
+    latest: dict = {}
+    for w, res in zip(weeks, fetched):
+        if isinstance(res, BaseException):
+            continue
+        for r in (res.get("roster_standings") or []):
+            history.setdefault(r["roster_id"], {})[w] = r.get("rank")
+            latest[r["roster_id"]] = r
+    if not history:
+        return f"  Sleeper has published no standings history for {lg}."
+
+    shown = weeks if len(weeks) <= 8 else \
+        sorted({weeks[0], *weeks[-6:]})          # first, then the recent run
+    out = [f"  {lg_cfg.get('name')} {lg_cfg.get('season')} — "
+           f"rank by week, through week {through}", "",
+           f"  {'team':20} " + " ".join(f"w{w:<3}" for w in shown)
+           + f" {'now':>4} {'form':>7} {'streak':>7}"]
+    # By CURRENT RANK, not by movement. A standings table that is not in
+    # standings order reads as an error; the movers are named below it.
+    for rid, _f, lastrank, _chg in sorted(movement(history),
+                                          key=lambda m: m[2]):
+        rec = (latest.get(rid) or {}).get("record") or ""
+        out.append(f"  {owner.get(rid, f'roster {rid}')[:20]:20} "
+                   + " ".join(f"{history[rid].get(w) or '-':<4}" for w in shown)
+                   + f" {lastrank:>4} {form(rec):>7} {streak(rec):>7}")
+
+    moves = movement(history)
+    climb = [m for m in moves if m[3] > 0]
+    fall = [m for m in moves if m[3] < 0]
+    out.append("")
+    if climb:
+        rid, first, now, chg = climb[0]
+        out.append(f"  biggest climb: {owner.get(rid, rid)} "
+                   f"{first} -> {now} (+{chg})")
+    if fall:
+        rid, first, now, chg = fall[-1]
+        out.append(f"  biggest fall:  {owner.get(rid, rid)} "
+                   f"{first} -> {now} ({chg})")
+    out.append("  form reads oldest to newest, so 'LWWWW' is four straight "
+               "wins after an opening loss.")
+    return "\n".join(out)

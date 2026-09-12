@@ -10,6 +10,13 @@ dependencies = [
     "httpx>=0.27",
 ]
 
+[project.optional-dependencies]
+# What scripts/check.py needs to check anything. pytest so the suite actually
+# runs rather than skipping modules it cannot import; pyflakes because a name
+# used but never imported is a NameError at call time, invisible to syntax
+# checking, and ships green when no test exercises that tool.
+dev = ["pytest>=7", "pyflakes>=3"]
+
 [project.urls]
 Homepage = "https://github.com/bealmot/sleeper-mcp"
 

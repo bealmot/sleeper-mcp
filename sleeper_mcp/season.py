@@ -325,3 +325,58 @@ def bracket_champion(rows: list[dict], names: dict | None = None) -> str | None:
 
     w = final.get("w")
     return names.get(w, f"roster {w}") if w is not None else None
+
+
+# --- standings over time ----------------------------------------------------
+# roster_standings(league_id, round) returns the table AS OF a week — `round`
+# is the week — and only for weeks that have finished. REST gives the current
+# totals and nothing else, so the PATH a season took is only available here.
+#
+# `record` is a string of results in order: "LWWWW" is an opening loss then
+# four wins. Its length is the games played, which is how a bye or a
+# postponement shows up.
+
+def parse_record(record: str) -> list[str]:
+    """"LWWWW" -> ['L','W','W','W','W']. Anything unexpected is dropped."""
+    return [c for c in (record or "").upper() if c in ("W", "L", "T")]
+
+
+def streak(record: str) -> str:
+    """The current run: 'W4' for four straight wins. '-' if none."""
+    games = parse_record(record)
+    if not games:
+        return "-"
+    last = games[-1]
+    n = 0
+    for c in reversed(games):
+        if c != last:
+            break
+        n += 1
+    return f"{last}{n}"
+
+
+def form(record: str, n: int = 5) -> str:
+    """The last n results, oldest first — 'LWWWW' reads left to right."""
+    games = parse_record(record)
+    return "".join(games[-n:]) if games else "-"
+
+
+def movement(history: dict[int, dict[int, int]]) -> list[tuple]:
+    """Rank movement per team, from the first recorded week to the last.
+
+    Args:
+        history: {roster_id: {week: rank}}.
+
+    Returns (roster_id, first_rank, last_rank, change) sorted by the biggest
+    CLIMB first. Change is positive for moving up the table, because rank 1 is
+    the top and a falling number is a rising team — the sign flip that makes
+    this worth a named function rather than a subtraction at the call site.
+    """
+    out = []
+    for rid, by_week in (history or {}).items():
+        weeks = sorted(w for w, r in by_week.items() if r is not None)
+        if not weeks:
+            continue
+        first, last = by_week[weeks[0]], by_week[weeks[-1]]
+        out.append((rid, first, last, first - last))
+    return sorted(out, key=lambda t: -t[3])

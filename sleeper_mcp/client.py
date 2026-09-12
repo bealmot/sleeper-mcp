@@ -31,7 +31,6 @@ ids? Call `find_my_leagues("<your username>")`. Everything it needs is public.
 from __future__ import annotations
 
 import logging
-import os
 
 import httpx
 

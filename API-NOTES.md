@@ -117,6 +117,28 @@ on the bench because he occupies the IR slot. Not a bug.
 Sleeper only renders lineup controls on the `/team` route — you cannot swap a
 player from `/matchup` by hand. The API does not care.
 
+## `roster_standings` — the table as it stood
+
+Authenticated. `roster_standings(league_id, round)` where **`round` is the
+WEEK**, and both arguments are required. It returns nothing for a week that has
+not finished, which is why an in-season league in week 1 gives an empty list
+for every round and looks broken.
+
+REST gives only the current totals, so this is the only place a season's SHAPE
+is recorded. Two fields earn it:
+
+- **`rank`** as of that week, so the whole trajectory is recoverable.
+- **`record` is a STRING of results in order** — `"LWWWW"` is an opening loss
+  then four straight wins, and its length is the games played. Nothing else in
+  the API gives form or a streak.
+
+A 7-6 team on a five-game winning run and a 7-6 team on a five-game losing one
+are the same row in the standings and opposite propositions in a trade.
+
+`RosterStanding` also carries `correct_picks`, `total_picks`, `correct_bans`
+and `total_bans`. Those are pick'em fields on a shared type and come back null
+for a fantasy league.
+
 ## Pick'em
 
 All authenticated. Pick'em has no web interface at all, so these endpoints are

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import datetime as dt
 
-from .client import (current_week, gql, league, league_id, mcp, players, rest,
-                     roster_id, scored, starting_slots)
+from .client import (current_week, gql, league, league_id, mcp, players,
+                     rest, roster_id, scored)
 
 
 async def _owners(lg: str) -> dict:
