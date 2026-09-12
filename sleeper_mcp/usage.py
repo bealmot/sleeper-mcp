@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 
 from .client import gql, league_id, mcp, players, rest
-from .reads import _ambiguous, _find
+from .lookup import ambiguous, find_player
 from .shares import collect, rank, trend
 
 SEASON_TYPE = "regular"
@@ -103,9 +103,9 @@ async def usage(player_name: str, weeks: int = 5, season: str = "") -> str:
         season: Look at a past season, e.g. "2025". Defaults to the current one.
     """
     P = await players()
-    hits = _find(P, player_name)
+    hits = find_player(P, player_name)
     if len(hits) != 1:
-        return _ambiguous(player_name, hits)
+        return ambiguous(player_name, hits)
     pid, v = hits[0]
 
     szn, through, _cur = await _completed(season or None)
@@ -248,7 +248,7 @@ METRICS = {
 }
 
 
-async def _season_rows(season: str) -> list[dict]:
+async def season_rows(season: str) -> list[dict]:
     """Every player's season totals, UNFILTERED BY POSITION.
 
     The position filter strips the synthetic per-team rows: asking for WR
@@ -297,7 +297,7 @@ async def season_leaders(position: str = "", metric: str = "points",
     if not season and through < 1:
         szn = str(int(szn) - 1)          # nothing finished this year yet
 
-    P, rows = await asyncio.gather(players(), _season_rows(szn))
+    P, rows = await asyncio.gather(players(), season_rows(szn))
     if not rows:
         return f"  No season stats for {szn}."
 

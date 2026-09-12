@@ -5,41 +5,9 @@ from __future__ import annotations
 import datetime as dt
 
 from .client import (AuthError, ConfigError, current_week, gql, league,
-                     league_id, mcp, players, rest, roster_id, scored)
-
-
-async def _owners(lg: str) -> dict:
-    """roster_id -> manager display name."""
-    users = await rest(f"/league/{lg}/users")
-    rosters = await rest(f"/league/{lg}/rosters")
-    who = {u["user_id"]: (u.get("display_name") or u.get("username"))
-           for u in (users or [])}
-    return {r["roster_id"]: who.get(r.get("owner_id"), "?")
-            for r in (rosters or [])}
-
-
-def _find(P: dict, name: str, pool: set | None = None) -> list[tuple[str, dict]]:
-    """Resolve a player name.
-
-    `pool` restricts the search to a set of ids — always pass one when you can.
-    Sleeper's dictionary holds ~11,000 players including retired ones, and
-    names are not unique ("Kenneth Walker" matches two, one inactive). Matching
-    against the whole dictionary and taking the first hit eventually submits an
-    ineligible player.
-    """
-    want = name.lower().strip()
-    items = ((pid, P[pid]) for pid in pool) if pool else P.items()
-    return [(pid, v) for pid, v in items
-            if v and v.get("team")
-            and v.get("position") in ("QB", "RB", "WR", "TE", "K", "DEF")
-            and want in (v.get("full_name") or "").lower()]
-
-
-def _ambiguous(name: str, hits: list) -> str:
-    opts = ", ".join(f"{v.get('full_name')} ({v.get('position')}-{v.get('team')})"
-                     for _, v in hits[:8])
-    return (f"No player matches {name!r}." if not hits
-            else f"Ambiguous — {len(hits)} match {name!r}: {opts}")
+                     league_id, mcp, owners, players, rest, roster_id,
+                     scored)
+from .lookup import ambiguous, find_player
 
 
 @mcp.tool()
@@ -123,7 +91,7 @@ async def matchup(league_id_: str = "", week: int = 0) -> str:
     """
     lg = league_id(league_id_ or None)
     wk = week or await current_week()
-    owner = await _owners(lg)
+    owner = await owners(lg)
 
     legs, projected, why = [], True, ""
     try:
@@ -160,7 +128,7 @@ async def matchup(league_id_: str = "", week: int = 0) -> str:
 async def standings(league_id_: str = "") -> str:
     """League standings with points for and against."""
     lg = league_id(league_id_ or None)
-    owner = await _owners(lg)
+    owner = await owners(lg)
     rosters = await rest(f"/league/{lg}/rosters") or []
     rows = []
     for r in rosters:
@@ -190,9 +158,9 @@ async def player_news(player_name: str, limit: int = 4) -> str:
         limit: How many items. Default 4.
     """
     P = await players()
-    hits = _find(P, player_name)
+    hits = find_player(P, player_name)
     if len(hits) != 1:
-        return _ambiguous(player_name, hits)
+        return ambiguous(player_name, hits)
     pid, v = hits[0]
     d = await gql('{get_player_news(sport:"nfl",player_id:"%s",limit:%d)'
                   '{source published metadata}}' % (pid, limit))
@@ -220,9 +188,9 @@ async def player_outlook(player_name: str, season: str = "") -> str:
         season: Defaults to the current season.
     """
     P = await players()
-    hits = _find(P, player_name)
+    hits = find_player(P, player_name)
     if len(hits) != 1:
-        return _ambiguous(player_name, hits)
+        return ambiguous(player_name, hits)
     pid, v = hits[0]
     yr = season or (await rest("/state/nfl")).get("season")
     d = await gql('{get_player_outlook(sport:"nfl",season:"%s",player_id:"%s")'
@@ -241,7 +209,7 @@ async def transactions(league_id_: str = "", week: int = 0) -> str:
     """League adds, drops, trades and waiver bids for a week."""
     lg = league_id(league_id_ or None)
     wk = week or await current_week()
-    P, owner = await players(), await _owners(lg)
+    P, owner = await players(), await owners(lg)
     tx = await rest(f"/league/{lg}/transactions/{wk}") or []
     if not tx:
         return f"No transactions in week {wk}."
@@ -274,7 +242,7 @@ async def pending(league_id_: str = "", week: int = 0) -> str:
     """
     lg = league_id(league_id_ or None)
     wk = week or await current_week()
-    P, owner = await players(), await _owners(lg)
+    P, owner = await players(), await owners(lg)
     tx = await rest(f"/league/{lg}/transactions/{wk}") or []
     pend = [t for t in tx if t.get("status") == "pending"]
     out = [f"Pending — week {wk} ({len(pend)})", ""]
@@ -302,7 +270,7 @@ async def draft_picks(league_id_: str = "") -> str:
     nothing. Needs a token.
     """
     lg = league_id(league_id_ or None)
-    owner = await _owners(lg)
+    owner = await owners(lg)
     out = ["Traded draft picks", ""]
     found = 0
     for rid in sorted(owner):
@@ -496,9 +464,9 @@ async def player_history(player_name: str, limit: int = 25,
 
     lg = league_id(league_id_ or None)
     P = await players()
-    hits = _find(P, player_name)
+    hits = find_player(P, player_name)
     if len(hits) != 1:
-        return _ambiguous(player_name, hits)
+        return ambiguous(player_name, hits)
     pid, v = hits[0]
 
     q = ('{league_transactions_by_player(league_id:"%s",player_id:"%s",'
@@ -510,7 +478,7 @@ async def player_history(player_name: str, limit: int = 25,
         return (f"  {v.get('full_name')} has never been transacted in this "
                 f"league — never drafted, claimed or dropped.")
 
-    owner = await _owners(lg)
+    owner = await owners(lg)
 
     def who(rid):
         return owner.get(rid, f"roster {rid}") if rid is not None else "?"
@@ -587,7 +555,7 @@ async def transaction_search(kind: str = "", status: str = "", week: int = 0,
                         pick_label, when)
 
     lg = league_id(league_id_ or None)
-    owner = await _owners(lg)
+    owner = await owners(lg)
 
     # Fetch wider than we display so the summary describes the whole result
     # rather than the first page of it. A completion rate computed over five

@@ -202,11 +202,11 @@ async def player_signal(player_name: str) -> str:
     sig, label = load()
     if not sig:
         return _HOWTO if not label else f"Signal file {label}."
-    from .reads import _ambiguous, _find
+    from .lookup import ambiguous, find_player
     P = await players()
-    hits = _find(P, player_name)
+    hits = find_player(P, player_name)
     if len(hits) != 1:
-        return _ambiguous(player_name, hits)
+        return ambiguous(player_name, hits)
     pid, v = hits[0]
     entry = sig.get(pid)
     out = [f"{v.get('full_name')} — {v.get('position')} {v.get('team')}",

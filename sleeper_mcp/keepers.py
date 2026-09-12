@@ -27,8 +27,9 @@ import asyncio
 import json
 
 from .client import (ConfigError, cache_clear, gql, league, league_id, mcp,
+                     owners,
                      players, require_writes, rest, roster_id)
-from .reads import _ambiguous, _find, _owners
+from .lookup import ambiguous, find_player
 
 # Sleeper hands `keepers` BACK as a list and takes it IN as a String. The
 # asymmetry is undocumented and silent: pass a list to the mutation and it is
@@ -130,7 +131,7 @@ async def keepers(history: bool = True, league_id_: str = "") -> str:
                 f"max_keepers is {cap!r}.")
 
     P, rosters, owner = await asyncio.gather(
-        players(), rest(f"/league/{lg}/rosters"), _owners(lg))
+        players(), rest(f"/league/{lg}/rosters"), owners(lg))
 
     def show(ids):
         return ", ".join((P.get(i) or {}).get("full_name", i)
@@ -168,7 +169,7 @@ async def keepers(history: bool = True, league_id_: str = "") -> str:
         while prev and prev not in ("0", "") and seen < 5:
             old = await league(prev)
             old_rosters, old_owner = await asyncio.gather(
-                rest(f"/league/{prev}/rosters"), _owners(prev))
+                rest(f"/league/{prev}/rosters"), owners(prev))
             old_kept = await _kept_in_draft(old, P, old_owner)
             out.append("")
             out.append(f"  {old.get('season')} draft — {len(old_kept)} kept")
@@ -220,9 +221,9 @@ async def set_keepers(player_names: list[str], confirm: bool = False,
 
     chosen, bad = [], []
     for name in player_names or []:
-        hits = [(pid, v) for pid, v in _find(P, name) if pid in mine]
+        hits = [(pid, v) for pid, v in find_player(P, name) if pid in mine]
         if len(hits) != 1:
-            bad.append(_ambiguous(name, hits).strip()
+            bad.append(ambiguous(name, hits).strip()
                        if hits else f"{name}: not on your roster.")
         else:
             chosen.append(hits[0][0])

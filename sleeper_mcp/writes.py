@@ -453,13 +453,13 @@ async def watch_player(player_name: str, unwatch: bool = False) -> str:
     selection; `unwatch_player` returns a plain Boolean and must NOT have one.
     One shared query template cannot serve both.
     """
-    from .reads import _ambiguous, _find
+    from .lookup import ambiguous, find_player
     require_writes("watch_player")
     cache_clear()
     P = await players()
-    hits = _find(P, player_name)
+    hits = find_player(P, player_name)
     if len(hits) != 1:
-        return _ambiguous(player_name, hits)
+        return ambiguous(player_name, hits)
     pid, v = hits[0]
     season = (await rest("/state/nfl")).get("season")
     if unwatch:

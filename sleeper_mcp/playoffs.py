@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import asyncio
 
-from .client import current_week, gql, league, league_id, mcp, rest
-from .reads import _owners
+from .client import (current_week, gql, league, league_id, mcp, owners,
+                     rest)
 from .season import (bracket_champion, bracket_rounds, ordinal,
                      simulate, split_games, team_strength,
                      win_probability)
@@ -64,7 +64,7 @@ async def _season(lg: str):
                                    int(s.get("ties", 0)), pf)
         scores.setdefault(r["roster_id"], [])
 
-    return scores, remaining, records, playoff_teams, await _owners(lg), wk
+    return scores, remaining, records, playoff_teams, await owners(lg), wk
 
 
 def _confidence(strength: dict) -> tuple[float, int, str]:
@@ -242,7 +242,7 @@ async def playoff_bracket(consolation: bool = False, previous: bool = False,
     start = int(settings.get("playoff_week_start") or 15)
     path = "losers_bracket" if consolation else "winners_bracket"
     rows, owner, wk = await asyncio.gather(
-        rest(f"/league/{lg}/{path}"), _owners(lg), current_week())
+        rest(f"/league/{lg}/{path}"), owners(lg), current_week())
 
     rounds = bracket_rounds(rows, owner)
     if not rounds:
@@ -316,7 +316,7 @@ async def standings_trend(league_id_: str = "", previous: bool = False) -> str:
 
     settings = lg_cfg.get("settings") or {}
     last = int(settings.get("playoff_week_start") or 15) - 1
-    owner, wk = await asyncio.gather(_owners(lg), current_week())
+    owner, wk = await asyncio.gather(owners(lg), current_week())
     through = last if previous else min(last, wk - 1)
     if through < 1:
         return (f"  No completed weeks in {lg_cfg.get('season')} yet — "

@@ -14,9 +14,8 @@ from __future__ import annotations
 
 import asyncio
 
-from .client import gql, league, league_id, mcp, players, rest
+from .client import gql, league, league_id, mcp, owners, players, rest
 from .picks import by_roster, value
-from .reads import _owners
 
 
 async def _league_for_season(lg: str, season: str) -> dict | None:
@@ -59,7 +58,7 @@ async def draft_board(season: str = "", round_: int = 0,
     if not cfg:
         return f"  No league found for season {season!r} in this chain."
     P, picks, owner = await asyncio.gather(
-        players(), _draft_picks(cfg), _owners(str(cfg["league_id"])))
+        players(), _draft_picks(cfg), owners(str(cfg["league_id"])))
     if not picks:
         return f"  No draft picks published for {cfg.get('season')}."
 
@@ -109,7 +108,7 @@ async def draft_review(season: str = "", limit: int = 10,
         limit: How many steals and busts to list. Default 10.
         league_id_: Override the configured league.
     """
-    from .usage import _season_rows
+    from .usage import season_rows
 
     lg = league_id(league_id_ or None)
     cfg = await _league_for_season(lg, season)
@@ -123,8 +122,8 @@ async def draft_review(season: str = "", limit: int = 10,
             szn = str(cfg.get("season"))
 
     P, picks, owner, rows = await asyncio.gather(
-        players(), _draft_picks(cfg), _owners(str(cfg["league_id"])),
-        _season_rows(szn))
+        players(), _draft_picks(cfg), owners(str(cfg["league_id"])),
+        season_rows(szn))
     if not picks:
         return f"  No draft picks published for {szn}."
     if not rows:
@@ -196,7 +195,7 @@ async def traded_picks(season: str = "", league_id_: str = "") -> str:
                 + (f" for {season}" if season else "") +
                 ". Sleeper lists only traded picks, so this is an empty "
                 "exception list, not a failure.")
-    owner = await _owners(lg)
+    owner = await owners(lg)
     out = [f"  {len(rows)} traded pick(s)", "",
            f"  {'season':>7} {'round':>6}  {'originally':20} {'now held by':20}"]
     for r in sorted(rows, key=lambda x: (str(x.get("season")),

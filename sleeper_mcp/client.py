@@ -279,6 +279,22 @@ async def starting_slots(lg: str | None = None) -> list[str]:
             if p not in ("BN", "IR", "TAXI")]
 
 
+async def owners(lg: str) -> dict:
+    """roster_id -> manager display name, for one league.
+
+    Lives here rather than in a tool module because seven of them need it and
+    it is league metadata, like league() and players(). It used to be `owners`
+    inside reads.py, which meant every other tool module imported a private
+    name out of a sibling — an underscore that six files ignored.
+    """
+    users = await rest(f"/league/{lg}/users")
+    rosters = await rest(f"/league/{lg}/rosters")
+    who = {u["user_id"]: (u.get("display_name") or u.get("username"))
+           for u in (users or [])}
+    return {r["roster_id"]: who.get(r.get("owner_id"), "?")
+            for r in (rosters or [])}
+
+
 def scored(stats: dict, scoring: dict) -> float:
     """Dot a projection's components against a league's own scoring settings.
 
