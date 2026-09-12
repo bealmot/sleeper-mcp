@@ -117,6 +117,35 @@ on the bench because he occupies the IR slot. Not a bug.
 Sleeper only renders lineup controls on the `/team` route — you cannot swap a
 player from `/matchup` by hand. The API does not care.
 
+## Pick'em
+
+All authenticated. Pick'em has no web interface at all, so these endpoints are
+the only desktop access to a pool.
+
+**`outcome` IS NOT A RESULT.** Every pick carries `outcome: "win"` — 1,283 of
+1,283 across a live 159-entry pool, winners and losers alike. It records which
+way the pick points. Scoring from it rates every entrant perfect, and the error
+is invisible, because a pool where everyone is flawless still renders as a
+tidy table. Nothing in these endpoints says who is winning.
+
+**`leg_id` is `"v1:regular:<week>"`**, not a snowflake. Get the list from
+`get_pickem_legs(league_id, roster_id)`; both arguments are required.
+
+**`get_pickem_picks_for_league(league_id, leg_id, include_tiebreaker)`** returns
+a Map keyed by roster id as a STRING, each value `{picks, tiebreaker}` where
+`picks` is `{game_id: {team, outcome, updated_at, game_id}}`.
+
+**Most entries are empty.** In that pool 69 of 159 had no picks at all, so a
+share computed against the entry count rather than the submitting count
+understates every split by nearly half.
+
+**Entries outnumber users.** REST reported 73 users against 159 rosters for the
+same pool — one person may hold several entries, so roster ids do not map
+one-to-one onto people.
+
+**`get_pickem_scoring_settings(league_id)`** returns `{leg_id: points}` for the
+whole season at once, which is how you spot a pool that weights later weeks.
+
 ## `league_transactions_filtered` — and what REST hides
 
 Authenticated. `league_id` is required; `type_filters`, `status_filters`,

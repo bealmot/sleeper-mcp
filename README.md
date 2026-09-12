@@ -140,7 +140,7 @@ executes immediately with no veto window.
 
 **Reads** — `roster` · `matchup` · `standings` · `transactions` · `pending` ·
 `player_news` · `player_outlook` · `trending` · `draft_picks` · `chat` ·
-`watched_players` · `pickem_status` · `league_info` · `find_my_leagues` · `player_history` · `keepers` · `transaction_search` ·
+`watched_players` · `pickem_status` · `league_info` · `find_my_leagues` · `player_history` · `keepers` · `transaction_search` · `pickem_consensus` ·
 `auth_status` · `setup_token`
 
 **Analysis** — `waiver_targets` · `bye_outlook` · `playoff_odds` · `matchup_odds` · `schedule_strength` · `playoff_bracket` · `usage` · `breakouts`
@@ -179,6 +179,13 @@ A few worth calling out:
   of their team's targets and carries, which is how a back who went from 40% of
   snaps to 75% surfaces while he is still available, rather than after the
   projections catch up and someone else claims him.
+- **`pickem_consensus`** shows what the whole pool picked and where your entry
+  stands apart, ordered by how much of the field is with you rather than by
+  kickoff. Chalk is not where a pool is won — taking the 99% side gains nothing
+  on people who all have it too — so the games that decide a week are exactly
+  the ones a kickoff-ordered list buries. It deliberately does not score
+  anyone: every pick in the data says `outcome: "win"` whether it came in or
+  not.
 - **`transaction_search`** is the only way to see what your league *tried* to
   do. Cancelled and rejected trades, and cancelled waiver claims, are absent
   from the ordinary transaction list entirely — one season here proposed 36

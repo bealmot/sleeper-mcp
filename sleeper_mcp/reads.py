@@ -651,3 +651,92 @@ async def transaction_search(kind: str = "", status: str = "", week: int = 0,
         for name, total, done in by_manager(rows, owner)[:12]:
             out.append(f"  {name[:22]:22} {total:9} {done:10}")
     return "\n".join(out)
+
+
+@mcp.tool()
+async def pickem_consensus(week: int = 0, pickem_league: str = "",
+                           pickem_roster: int = 0) -> str:
+    """What the whole pick'em pool picked, and where your entry stands apart.
+
+    NEEDS A TOKEN.
+
+    In a pool of any size the chalk is not where weeks are won. Taking the 99%
+    side of a game gains nothing on the field — everyone else has it too. The
+    separation comes from the divided games and from the ones you are alone on,
+    and a list ordered by kickoff hides exactly those. This orders by how much
+    of the field is with you, most exposed first.
+
+    IT DOES NOT SAY WHO IS WINNING. Every pick in the data carries
+    `outcome: "win"` whether it came in or not — that field records which way a
+    pick points, not whether it was right. Scoring from it would rate every
+    entrant perfect.
+
+    Args:
+        week: NFL week. 0 (default) uses the current week.
+        pickem_league: Defaults to SLEEPER_PICKEM_LEAGUE.
+        pickem_roster: Defaults to SLEEPER_PICKEM_ROSTER.
+    """
+    from .client import (ConfigError, DEFAULT_PICKEM_LEAGUE,
+                         DEFAULT_PICKEM_ROSTER)
+    from .pools import consensus, entries, exposure
+
+    lg = (pickem_league or DEFAULT_PICKEM_LEAGUE).strip()
+    rid = pickem_roster or DEFAULT_PICKEM_ROSTER
+    if not lg or rid is None:
+        raise ConfigError(
+            "Pick'em needs SLEEPER_PICKEM_LEAGUE and SLEEPER_PICKEM_ROSTER "
+            "(or the arguments). The ids come from the app's share link.")
+    wk = week or await current_week()
+
+    legs = (await gql('{get_pickem_legs(league_id:"%s",roster_id:%d)'
+                      '{leg_id}}' % (lg, rid), auth=True)
+            ).get("get_pickem_legs") or []
+    leg_id = next((l["leg_id"] for l in legs
+                   if str(l.get("leg_id", "")).endswith(f":{wk}")), None)
+    if not leg_id:
+        return (f"  No pick'em leg for week {wk}. Legs available: "
+                + ", ".join(sorted(str(l.get("leg_id")) for l in legs)) or "none")
+
+    book = (await gql('{get_pickem_picks_for_league(league_id:"%s",'
+                      'leg_id:"%s",include_tiebreaker:true)}' % (lg, leg_id),
+                      auth=True)).get("get_pickem_picks_for_league") or {}
+    if not book:
+        return f"  No picks published for {leg_id} yet."
+
+    counts = entries(book)
+    rows = consensus(book, rid)
+    mine = exposure(rows)
+
+    out = [f"  Week {wk} pick'em — {counts['submitted']} of "
+           f"{counts['total']} entries submitted",
+           f"  your entry: {mine['picked']} picks, {mine['against_field']} "
+           f"against the field, {mine['contrarian']} under 50%", ""]
+    if not mine["picked"]:
+        out.append("  YOU HAVE NO PICKS IN for this week. A missing pick is a "
+                   "zero, not a skip.")
+        out.append("")
+    out.append(f"  {'matchup':14} {'field':>16} {'you':>5} {'with you':>9}")
+    for r in rows:
+        teams = r["teams"]
+        matchup = "/".join(teams[:2]) if len(teams) > 1 else teams[0]
+        split = ", ".join(f"{t} {r['counts'][t] / r['pickers'] * 100:.0f}%"
+                          for t in teams[:2])
+        you = r["my_pick"] or "-"
+        share = (f"{r['share'] * 100:.0f}%" if r["share"] is not None
+                 else "  -")
+        flag = "" if r["with_field"] is not False else "   <-"
+        out.append(f"  {matchup:14} {split:>16} {you:>5} {share:>9}{flag}")
+
+    scoring = (await gql('{get_pickem_scoring_settings(league_id:"%s")}' % lg,
+                         auth=True)).get("get_pickem_scoring_settings") or {}
+    pts = scoring.get(leg_id)
+    if pts is not None:
+        weights = set(scoring.values())
+        note = ("every week is worth the same" if len(weights) == 1
+                else "WEEKS ARE WEIGHTED DIFFERENTLY — check later weeks")
+        out += ["", f"  scoring: {pts:g} point(s) per correct pick this week; "
+                    f"{note}."]
+    out += ["", "  '<-' marks a pick against the field's favourite. Rows are "
+                "ordered by how", "  much of the pool is with you, most exposed "
+                "first."]
+    return "\n".join(out)
