@@ -16,6 +16,7 @@ general tidiness:
   docstrings    every tool has one, because it is what the model reads
   boundaries    the real-money guard still refuses what it claims to
   tests         pytest
+  coverage      total lines, against a floor that only moves up
   install       --fresh only: resolve and import in a CLEAN venv
 
 PRIVACY IS THE ONE THAT EARNS ITS KEEP. This server was extracted from a
@@ -335,6 +336,47 @@ def check_tests() -> bool:
     return ok(f"tests — {last}{where}")
 
 
+# A RATCHET, not a target. The number is not the point — coverage collapsing
+# quietly is. It sat at 30% for weeks while every check reported green, because
+# nothing measured it: the pure modules were near 100% and the tool layer, the
+# half where every user-visible bug happened, was at 0%.
+#
+# Raise this when it rises. Never lower it to make a push go through.
+COVERAGE_FLOOR = 65
+
+
+def check_coverage() -> bool:
+    """Total line coverage, against a floor that only moves up."""
+    py = _test_python()
+    run = subprocess.run([py, "-m", "coverage", "run", "--source=sleeper_mcp",
+                          "-m", "pytest", "-q"],
+                         capture_output=True, text=True, cwd=ROOT)
+    if "No module named" in (run.stderr or ""):
+        return fail("coverage", [
+            "coverage is not installed, so nothing measures this.",
+            "",
+            "    uv pip install -e '.[dev]'",
+        ])
+    rep = subprocess.run([py, "-m", "coverage", "report"],
+                         capture_output=True, text=True, cwd=ROOT)
+    total = rep.stdout.strip().splitlines()[-1].split()[-1].rstrip("%")
+    try:
+        pct = int(total)
+    except ValueError:
+        return fail("coverage", [f"could not read a total from: {total!r}"])
+    if pct < COVERAGE_FLOOR:
+        worst = [l for l in rep.stdout.splitlines()
+                 if "%" in l and "TOTAL" not in l and "Cover" not in l]
+        worst.sort(key=lambda l: int(l.split()[-1].rstrip("%")))
+        return fail("coverage", [
+            f"{pct}% is below the floor of {COVERAGE_FLOOR}%.",
+            "  least covered:",
+            *(f"    {l}" for l in worst[:5]),
+        ])
+    head = f" (floor {COVERAGE_FLOOR})" if pct == COVERAGE_FLOOR else ""
+    return ok(f"coverage — {pct}%{head}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--fresh", action="store_true",
@@ -344,7 +386,8 @@ def main() -> int:
 
     print(f"{DIM}sleeper-mcp local checks — {ROOT}{OFF}")
     results = [check_syntax(), check_names(), check_privacy(), check_secrets(),
-               check_docstrings(), check_boundaries(), check_tests()]
+               check_docstrings(), check_boundaries(), check_tests(),
+               check_coverage()]
     if args.fresh:
         results.append(check_fresh_install())
     else:

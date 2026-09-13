@@ -303,10 +303,11 @@ git config core.hooksPath .githooks      # once, to run them before every push
 python scripts/smoke.py --season 2025    # call every read tool for real
 ```
 
-Seven checks: syntax, **names** (pyflakes — a name used but never imported is
+Eight checks: syntax, **names** (pyflakes — a name used but never imported is
 a NameError nothing else catches), secrets, tool docstrings, the real-money
-boundary, pytest, and a **privacy** scan that fails if a private league's ids,
-team names or local paths appear in a committed file. That last one exists
+boundary, pytest, **coverage** against a floor that only moves up, and a
+**privacy** scan that fails if a private league's ids, team names or local
+paths appear in a committed file. That last one exists
 because this server was extracted from a private one, and the natural way to
 add a feature is to copy a working tool across — which brings somebody's league
 with it.
@@ -316,11 +317,25 @@ fails to import is skipped by pytest while the summary still says "passed", so
 the gate was quietly running 114 of 142 tests; it now names any module that did
 not run and fails.
 
-**`scripts/smoke.py` is the other half.** The pure modules are covered by unit
-tests; the tool layer is not, and its failure modes — a format string on a
-None, an endpoint that turns out to need a token — are invisible to every
-static check. It needs a real league, so it is not part of the gate. Its first
-run found `pickem_status` returning "Unauthorized" for every user.
+**Tests come in three layers, because the bugs do.** The pure modules —
+`optimizer`, `season`, `shares`, `moves`, `pools`, `picks`, `lookup` — are
+unit-tested near 100% with no network. The tool layer runs against
+`tests/fake.py`, a fake Sleeper whose fixtures are shaped like real responses
+*including the parts nobody would invent*: the `TEAM_<abbr>` aggregate row that
+sits among the players, a retired duplicate with no team, a trade that lists
+each player in both adds and drops, a traded pick encoded as a
+comma-separated string. Every one of those shipped a bug because a
+hand-written fixture omitted it.
+
+**`scripts/smoke.py` is the third layer**, and the only one that needs a real
+league — so it is not part of the gate. Its first run found `pickem_status`
+returning "Unauthorized" for every user, which no offline test could see.
+
+Coverage was 30% when this was first measured, and the split mattered more
+than the number: the pure modules were near 100% and the tool layer, where
+every user-visible bug had happened, was at **0%**. Measuring it also put
+`optimizer.py` at 69%, and the uncovered lines turned out to be the branch
+every real roster takes — which was returning a lineup 24 points short.
 
 `--fresh` is the one worth running before a release. Every other check runs
 against whatever is already installed here, so a dependency that no longer
