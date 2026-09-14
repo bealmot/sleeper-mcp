@@ -190,9 +190,12 @@ A few worth calling out:
   stands apart, ordered by how much of the field is with you rather than by
   kickoff. Chalk is not where a pool is won — taking the 99% side gains nothing
   on people who all have it too — so the games that decide a week are exactly
-  the ones a kickoff-ordered list buries. It deliberately does not score
-  anyone: every pick in the data says `outcome: "win"` whether it came in or
-  not.
+  the ones a kickoff-ordered list buries. It scores from Sleeper's
+  scoreboard rather than from the picks — every pick in the data says
+  `outcome: "win"` whether it came in or not, so scoring from that field rates
+  every entrant perfect. It also reports what taking the pool favourite every
+  time would have returned, which is the number that says whether the PICKING
+  was good rather than whether the week was.
 - **`transaction_search`** is the only way to see what your league *tried* to
   do. Cancelled and rejected trades, and cancelled waiver claims, are absent
   from the ordinary transaction list entirely — one season here proposed 36

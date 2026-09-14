@@ -96,3 +96,94 @@ def exposure(rows: list[dict], contrarian_below: float = 0.5) -> dict:
                           if r["share"] is not None
                           and r["share"] < contrarian_below),
     }
+
+
+# --- results ----------------------------------------------------------------
+# Scoring a pool needs the games, and they are NOT in the pick data. Every pick
+# carries `outcome: "win"` whether it came in or not, so the only honest source
+# is Sleeper's own scoreboard: GET /scores/nfl/regular/<season>/<week>.
+#
+# The teams and scores sit inside `metadata` — `home_team`, `away_team`,
+# `home_score`, `away_score` — while `status` is top level. Observed statuses
+# are "complete" and "pre_game"; anything that is not complete is treated as
+# undecided, so a game in progress is never scored from a partial lead.
+
+FINAL = "complete"
+
+
+def winners(games: list[dict]) -> dict[str, str]:
+    """-> {game_id: winning team}, FINAL GAMES ONLY.
+
+    A game that has not finished is absent rather than present with a guess.
+    Scoring a leader at half time is the pick'em version of counting a
+    Thursday-night player as a completed week.
+    """
+    out = {}
+    for g in games or []:
+        if g.get("status") != FINAL:
+            continue
+        md = g.get("metadata") or {}
+        home, away = md.get("home_team"), md.get("away_team")
+        hs, as_ = md.get("home_score"), md.get("away_score")
+        if not home or not away or hs is None or as_ is None:
+            continue
+        out[str(g.get("game_id"))] = (home if hs > as_
+                                      else away if as_ > hs else "TIE")
+    return out
+
+
+def score_entry(entry: dict, results: dict) -> dict:
+    """-> {correct, wrong, pending} for one entry."""
+    correct = wrong = pending = 0
+    for gid, pick in ((entry or {}).get("picks") or {}).items():
+        won = results.get(str(gid))
+        if won is None:
+            pending += 1
+        elif (pick or {}).get("team") == won:
+            correct += 1
+        else:
+            wrong += 1
+    return {"correct": correct, "wrong": wrong, "pending": pending}
+
+
+def leaderboard(book: dict, results: dict) -> list[tuple]:
+    """-> [(correct, wrong, pending, roster_id)], best first, submitted only."""
+    rows = []
+    for rid, entry in (book or {}).items():
+        if not ((entry or {}).get("picks") or {}):
+            continue
+        s = score_entry(entry, results)
+        rows.append((s["correct"], s["wrong"], s["pending"], str(rid)))
+    rows.sort(key=lambda r: (-r[0], r[1]))
+    return rows
+
+
+def chalk_score(book: dict, results: dict) -> int:
+    """How many an entry would have if it took the pool favourite every time.
+
+    THE COMPARISON THAT MATTERS. A raw record says whether the week went well;
+    this says whether the picking did. Differentiating is a choice with a
+    price, and the price is only visible against what following the room would
+    have returned.
+    """
+    got = 0
+    for gid, counts in field_splits(book).items():
+        won = results.get(str(gid))
+        if won and max(counts, key=counts.get) == won:
+            got += 1
+    return got
+
+
+def against_the_field(entry: dict, book: dict, results: dict) -> dict:
+    """Split one entry's decided picks by whether they followed the favourite."""
+    splits = field_splits(book)
+    out = {"with": [0, 0], "against": [0, 0]}      # [hit, miss]
+    for gid, pick in ((entry or {}).get("picks") or {}).items():
+        won = results.get(str(gid))
+        counts = splits.get(gid)
+        if won is None or not counts:
+            continue
+        side = ("with" if (pick or {}).get("team")
+                == max(counts, key=counts.get) else "against")
+        out[side][0 if pick.get("team") == won else 1] += 1
+    return out

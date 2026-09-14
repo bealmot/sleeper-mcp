@@ -6,8 +6,10 @@ each entry holding `picks` (game_id -> {team, outcome, ...}) and a
 entries are empty.
 """
 
-from sleeper_mcp.pools import (consensus, entries, exposure, field_splits,
-                               my_picks)
+from sleeper_mcp.pools import (against_the_field, chalk_score, consensus,
+                               entries, exposure, field_splits,
+                               leaderboard, my_picks, score_entry,
+                               winners)
 
 
 def pick(team):
@@ -84,3 +86,105 @@ def test_an_empty_book_is_not_a_crash():
     assert consensus({}, 57) == []
     assert entries({}) == {"total": 0, "submitted": 0, "empty": 0}
     assert entries(None)["total"] == 0
+
+
+# --- scoring ----------------------------------------------------------------
+# Shapes copied from GET /scores/nfl/regular/2026/1. Teams and scores live in
+# `metadata`; `status` is top level and was observed as "complete" or
+# "pre_game". The pick data cannot score anything — every pick says
+# outcome "win" — so the scoreboard is the only source.
+
+def game(gid, away, away_pts, home, home_pts, status="complete"):
+    return {"game_id": gid, "status": status,
+            "metadata": {"away_team": away, "home_team": home,
+                         "away_score": away_pts, "home_score": home_pts}}
+
+
+GAMES = [
+    game("g1", "CHI", 59, "CAR", 37),          # away wins
+    game("g2", "TB", 27, "CIN", 33),           # home wins
+    game("g3", "DEN", None, "KC", None, status="pre_game"),
+]
+
+
+def test_only_finished_games_produce_a_winner():
+    w = winners(GAMES)
+    assert w == {"g1": "CHI", "g2": "CIN"}
+    assert "g3" not in w
+
+
+def test_a_game_in_progress_is_never_scored_from_a_partial_lead():
+    """The pick'em version of counting a Thursday player as a whole week."""
+    live = [game("g4", "NYJ", 21, "NE", 3, status="in_game")]
+    assert winners(live) == {}
+
+
+def test_a_tie_is_recorded_as_a_tie_not_a_home_win():
+    assert winners([game("g5", "AAA", 17, "BBB", 17)])["g5"] == "TIE"
+
+
+def test_missing_scores_are_skipped_rather_than_guessed():
+    assert winners([game("g6", "AAA", None, "BBB", 10)]) == {}
+    assert winners([]) == {} and winners(None) == {}
+
+
+def test_an_entry_splits_into_correct_wrong_and_pending():
+    entry = {"picks": {"g1": pick("CHI"), "g2": pick("TB"), "g3": pick("KC")}}
+    assert score_entry(entry, winners(GAMES)) == \
+        {"correct": 1, "wrong": 1, "pending": 1}
+
+
+def test_a_pending_game_is_not_counted_as_wrong():
+    """It is the difference between a bad week and an unfinished one."""
+    entry = {"picks": {"g3": pick("KC")}}
+    assert score_entry(entry, winners(GAMES))["wrong"] == 0
+
+
+def test_an_empty_entry_scores_nothing_without_erroring():
+    assert score_entry({}, winners(GAMES))["correct"] == 0
+    assert score_entry(None, {})["pending"] == 0
+
+
+def test_the_leaderboard_orders_by_correct_and_excludes_empty_entries():
+    book = {
+        "1": {"picks": {"g1": pick("CHI"), "g2": pick("CIN")}},
+        "2": {"picks": {"g1": pick("CAR"), "g2": pick("CIN")}},
+        "3": {"picks": {}},
+    }
+    board = leaderboard(book, winners(GAMES))
+    assert [r[3] for r in board] == ["1", "2"]
+    assert board[0][0] == 2
+
+
+def test_chalk_is_what_following_the_room_would_have_returned():
+    """The number that says whether the PICKING was good, not the week."""
+    book = {
+        "1": {"picks": {"g1": pick("CHI"), "g2": pick("CIN")}},
+        "2": {"picks": {"g1": pick("CHI"), "g2": pick("CIN")}},
+        "3": {"picks": {"g1": pick("CAR"), "g2": pick("TB")}},
+    }
+    assert chalk_score(book, winners(GAMES)) == 2
+
+
+def test_chalk_can_be_beaten_and_can_be_wrong():
+    """A 99% consensus that loses costs everybody equally, including chalk."""
+    book = {"1": {"picks": {"g1": pick("CAR")}},
+            "2": {"picks": {"g1": pick("CAR")}}}
+    assert chalk_score(book, winners(GAMES)) == 0
+
+
+def test_following_the_field_is_told_apart_from_going_against_it():
+    book = {
+        "1": {"picks": {"g1": pick("CHI"), "g2": pick("TB")}},
+        "2": {"picks": {"g1": pick("CHI"), "g2": pick("CIN")}},
+        "3": {"picks": {"g1": pick("CHI"), "g2": pick("CIN")}},
+    }
+    got = against_the_field(book["1"], book, winners(GAMES))
+    assert got["with"] == [1, 0]        # CHI with the field, correct
+    assert got["against"] == [0, 1]     # TB against the field, wrong
+
+
+def test_pending_games_are_left_out_of_the_field_split():
+    book = {"1": {"picks": {"g3": pick("KC")}}}
+    got = against_the_field(book["1"], book, winners(GAMES))
+    assert got["with"] == [0, 0] and got["against"] == [0, 0]

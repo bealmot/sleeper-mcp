@@ -6,7 +6,7 @@ import datetime as dt
 
 from .client import (AuthError, ConfigError, current_week, gql, league,
                      league_id, mcp, owners, players, rest, roster_id,
-                     scored)
+                     scored, state)
 from .lookup import ambiguous, find_player
 
 
@@ -651,10 +651,12 @@ async def pickem_consensus(week: int = 0, pickem_league: str = "",
     and a list ordered by kickoff hides exactly those. This orders by how much
     of the field is with you, most exposed first.
 
-    IT DOES NOT SAY WHO IS WINNING. Every pick in the data carries
-    `outcome: "win"` whether it came in or not — that field records which way a
-    pick points, not whether it was right. Scoring from it would rate every
-    entrant perfect.
+    SCORED FROM THE SCOREBOARD, NOT FROM THE PICKS. Every pick in the data
+    carries `outcome: "win"` whether it came in or not — that field records
+    which way a pick points, and scoring from it rates every entrant perfect.
+    Results come from Sleeper's own scoreboard instead, and only games marked
+    complete are counted, so a game in progress stays pending rather than being
+    scored from a partial lead.
 
     Args:
         week: NFL week. 0 (default) uses the current week.
@@ -663,7 +665,8 @@ async def pickem_consensus(week: int = 0, pickem_league: str = "",
     """
     from .client import (ConfigError, DEFAULT_PICKEM_LEAGUE,
                          DEFAULT_PICKEM_ROSTER)
-    from .pools import consensus, entries, exposure
+    from .pools import (against_the_field, chalk_score, consensus, entries,
+                        exposure, leaderboard, score_entry, winners)
 
     lg = (pickem_league or DEFAULT_PICKEM_LEAGUE).strip()
     rid = pickem_roster or DEFAULT_PICKEM_ROSTER
@@ -692,15 +695,48 @@ async def pickem_consensus(week: int = 0, pickem_league: str = "",
     rows = consensus(book, rid)
     mine = exposure(rows)
 
+    # Results, from the scoreboard. A week that has not started simply scores
+    # nothing, and the output falls back to consensus alone.
+    try:
+        season = str((await state()).get("season") or "")
+        games = await rest(f"/scores/nfl/regular/{season}/{wk}") if season else []
+    except Exception:
+        # No scoreboard is a degraded result, not a failure — the consensus
+        # half of this tool still works without it.
+        games = []
+    results = winners(games or [])
+    mine_score = score_entry(book.get(str(rid)) or book.get(rid), results)
+    board = leaderboard(book, results)
+
     out = [f"  Week {wk} pick'em — {counts['submitted']} of "
-           f"{counts['total']} entries submitted",
-           f"  your entry: {mine['picked']} picks, {mine['against_field']} "
-           f"against the field, {mine['contrarian']} under 50%", ""]
+           f"{counts['total']} entries submitted"]
+    if results:
+        ahead = sum(1 for r in board if r[0] > mine_score["correct"])
+        best = board[0][0] if board else 0
+        mid = board[len(board) // 2][0] if board else 0
+        out.append(f"  YOU: {mine_score['correct']} correct, "
+                   f"{mine_score['wrong']} wrong, {mine_score['pending']} "
+                   f"pending   ({ahead} of {len(board)} entries ahead)")
+        out.append(f"  pool: best {best}, median {mid}")
+        chalk = chalk_score(book, results)
+        delta = mine_score["correct"] - chalk
+        split = against_the_field(book.get(str(rid)) or book.get(rid),
+                                  book, results)
+        out.append(f"  taking the pool favourite every time would have given "
+                   f"{chalk} — you are {delta:+d}")
+        out.append(f"  with the field {split['with'][0]} hit "
+                   f"{split['with'][1]} miss;  against it "
+                   f"{split['against'][0]} hit {split['against'][1]} miss")
+    out.append(f"  your entry: {mine['picked']} picks, "
+               f"{mine['against_field']} against the field, "
+               f"{mine['contrarian']} under 50%")
+    out.append("")
     if not mine["picked"]:
         out.append("  YOU HAVE NO PICKS IN for this week. A missing pick is a "
                    "zero, not a skip.")
         out.append("")
-    out.append(f"  {'matchup':14} {'field':>16} {'you':>5} {'with you':>9}")
+    out.append(f"  {'':7}{'matchup':14} {'field':>16} {'you':>5} "
+               f"{'with you':>9}")
     for r in rows:
         teams = r["teams"]
         matchup = "/".join(teams[:2]) if len(teams) > 1 else teams[0]
@@ -710,7 +746,11 @@ async def pickem_consensus(week: int = 0, pickem_league: str = "",
         share = (f"{r['share'] * 100:.0f}%" if r["share"] is not None
                  else "  -")
         flag = "" if r["with_field"] is not False else "   <-"
-        out.append(f"  {matchup:14} {split:>16} {you:>5} {share:>9}{flag}")
+        won = results.get(str(r["game_id"]))
+        mark = ("       " if not results else
+                "  ---  " if won is None else
+                "  HIT  " if you == won else "  MISS ")
+        out.append(f"{mark}{matchup:14} {split:>16} {you:>5} {share:>9}{flag}")
 
     scoring = (await gql('{get_pickem_scoring_settings(league_id:"%s")}' % lg,
                          auth=True)).get("get_pickem_scoring_settings") or {}
@@ -721,7 +761,7 @@ async def pickem_consensus(week: int = 0, pickem_league: str = "",
                 else "WEEKS ARE WEIGHTED DIFFERENTLY — check later weeks")
         out += ["", f"  scoring: {pts:g} point(s) per correct pick this week; "
                     f"{note}."]
-    out += ["", "  '<-' marks a pick against the field's favourite. Rows are "
-                "ordered by how", "  much of the pool is with you, most exposed "
-                "first."]
+    out += ["", "  '<-' marks a pick against the field's favourite; '---' is "
+                "a game not yet final.", "  Rows are ordered by how much of the "
+                "pool is with you, most exposed first."]
     return "\n".join(out)

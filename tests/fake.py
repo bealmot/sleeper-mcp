@@ -157,6 +157,19 @@ async def rest(path: str):
     if re.fullmatch(r"/draft/\w+", path):
         return {"draft_id": "d1", "type": "snake", "status": "complete",
                 "season": "2026", "settings": {"rounds": 2}}
+    if re.fullmatch(r"/scores/nfl/regular/\d+/\d+", path):
+        # Teams and scores sit in `metadata`; `status` is top level. Observed
+        # values are "complete" and "pre_game". g2 is deliberately unfinished,
+        # because a game in progress must stay pending rather than be scored
+        # from a partial lead.
+        return [
+            {"game_id": "g1", "status": "complete",
+             "metadata": {"away_team": "AAA", "home_team": "BBB",
+                          "away_score": 24, "home_score": 17}},
+            {"game_id": "g2", "status": "pre_game",
+             "metadata": {"away_team": "CCC", "home_team": "AAA",
+                          "away_score": None, "home_score": None}},
+        ]
     if path == "/state/nfl":
         return {"week": 5, "season": "2026", "season_type": "regular"}
     if re.fullmatch(r"/user/\w+", path):

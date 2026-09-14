@@ -314,3 +314,33 @@ async def test_respond_trade_refuses_a_response_it_does_not_understand(sleeper):
     from sleeper_mcp.writes import respond_trade
     out = await call(respond_trade, transaction_id="t1", response="maybe")
     assert "Refused" in out
+
+
+@pytest.mark.asyncio
+async def test_pickem_scores_against_the_scoreboard_not_the_picks(sleeper):
+    """Every pick says outcome "win". Scoring from that rates everyone perfect.
+
+    The fake's entry 1 took AAA in g1 (AAA won) and BBB in g2 (not final), so
+    the only honest reading is one correct and one pending.
+    """
+    from sleeper_mcp.reads import pickem_consensus
+    out = await call(pickem_consensus)
+    assert "1 correct" in out
+    assert "0 wrong" in out
+
+
+@pytest.mark.asyncio
+async def test_an_unfinished_game_shows_as_pending_not_a_miss(sleeper):
+    from sleeper_mcp.reads import pickem_consensus
+    out = await call(pickem_consensus)
+    assert "1 pending" in out
+    assert "---" in out
+
+
+@pytest.mark.asyncio
+async def test_the_chalk_comparison_is_reported(sleeper):
+    """A record says whether the week went well; this says whether the
+    PICKING did."""
+    from sleeper_mcp.reads import pickem_consensus
+    out = await call(pickem_consensus)
+    assert "taking the pool favourite" in out

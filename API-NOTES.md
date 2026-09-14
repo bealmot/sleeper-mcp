@@ -174,6 +174,14 @@ way the pick points. Scoring from it rates every entrant perfect, and the error
 is invisible, because a pool where everyone is flawless still renders as a
 tidy table. Nothing in these endpoints says who is winning.
 
+**THE SCOREBOARD IS A SEPARATE ENDPOINT, and it is the only way to score a
+pool.** `GET /scores/nfl/regular/<season>/<week>` returns one entry per game
+whose `game_id` matches the pick'em ids exactly. The teams and scores are
+inside `metadata` — `home_team`, `away_team`, `home_score`, `away_score` —
+while `status` is top level, observed as `"complete"` and `"pre_game"`. Treat
+anything but complete as undecided: a game in progress has a leader and not a
+winner.
+
 **`leg_id` is `"v1:regular:<week>"`**, not a snowflake. Get the list from
 `get_pickem_legs(league_id, roster_id)`; both arguments are required.
 
