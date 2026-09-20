@@ -70,11 +70,72 @@ def test_quoted_and_form_and_json_bodies_normalise(cfg):
         assert json.loads(cfg.read_text())["token"] == GOOD
 
 
-def test_enable_writes_flag(cfg):
+def test_enable_writes_needs_the_session_flag_and_the_users_tick(cfg):
+    """The tool argument alone must not enable writes: the page shows a
+    banner and the request carries ?writes=1 only when the box is ticked."""
     s = webauth.start(enable_writes=True, verify=_verify_ok, ttl=5)
-    _req(s, "POST", f"/token/{s.nonce}", body=GOOD)
+    _, _, page = _req(s, "GET", f"/setup/{s.nonce}")
+    assert "ENABLE WRITES" in page.upper() and 'id="writes"' in page
+    _req(s, "POST", f"/token/{s.nonce}", body=GOOD)          # box NOT ticked
+    assert "enable_writes" not in json.loads(cfg.read_text())
+    assert client.WRITES_ENABLED is False
+
+    s = webauth.start(enable_writes=True, verify=_verify_ok, ttl=5)
+    _req(s, "POST", f"/token/{s.nonce}?writes=1", body=GOOD)  # ticked
     assert json.loads(cfg.read_text())["enable_writes"] == "1"
     assert client.WRITES_ENABLED is True
+    assert config.source("SLEEPER_TOKEN") == "config file"
+
+
+def test_a_read_only_session_ignores_a_forged_writes_flag(cfg):
+    s = webauth.start(enable_writes=False, verify=_verify_ok, ttl=5)
+    _, _, page = _req(s, "GET", f"/setup/{s.nonce}")
+    assert 'id="writes"' not in page
+    _req(s, "POST", f"/token/{s.nonce}?writes=1", body=GOOD)
+    assert "enable_writes" not in json.loads(cfg.read_text())
+    assert client.WRITES_ENABLED is False
+
+
+def test_two_submissions_inside_the_verify_window_save_exactly_once(cfg):
+    import threading
+    gate = threading.Event()
+    seen = []
+
+    def slow_verify(tok):
+        seen.append(tok)
+        gate.wait(2)
+        return _verify_ok(tok)
+
+    s = webauth.start(verify=slow_verify, ttl=5)
+    results = []
+
+    def post(body):
+        results.append(_req(s, "POST", f"/token/{s.nonce}", body=body)[0])
+    a = threading.Thread(target=post, args=(GOOD,))
+    b = threading.Thread(target=post, args=(GOOD,))
+    a.start()
+    time.sleep(0.1)
+    b.start()
+    time.sleep(0.1)
+    gate.set()
+    a.join(3)
+    b.join(3)
+    assert sorted(results) == [200, 409] and len(seen) == 1
+
+
+def test_the_listening_socket_is_closed_after_use(cfg):
+    s = webauth.start(verify=_verify_ok, ttl=5)
+    assert _req(s, "POST", f"/token/{s.nonce}", body=GOOD)[0] == 200
+    s.done.wait(2)
+    # serve_forever polls every 0.5 s, so shutdown + close can take that long.
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        try:
+            http.client.HTTPConnection("127.0.0.1", s.port, timeout=1).request("GET", "/")
+        except (ConnectionError, OSError):
+            return
+        time.sleep(0.1)
+    pytest.fail("port still accepting connections after the session finished")
 
 
 def test_bad_token_is_not_saved_and_link_stays_open(cfg):

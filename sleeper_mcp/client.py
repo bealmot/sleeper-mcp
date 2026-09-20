@@ -21,7 +21,7 @@ Configuration, all optional, from the environment or the config file
     SLEEPER_ROSTER_ID      your roster in that league (an int, 1..N)
     SLEEPER_PICKEM_LEAGUE  pick'em lobby id, if you play pick'em
     SLEEPER_PICKEM_ROSTER  your entry in that lobby
-    SLEEPER_TOKEN          JWT, WRITES ONLY — reads never need it
+    SLEEPER_TOKEN          JWT — writes, and the reads marked NEEDS A TOKEN
     SLEEPER_ENABLE_WRITES  must be "1" for any mutation to be attempted
 
 `sleeper-mcp setup` verifies a token and writes the file. Do not know your
@@ -199,8 +199,8 @@ def require_writes(action: str) -> None:
             f"{action} needs SLEEPER_TOKEN. Run `sleeper-mcp setup`, or set it: "
             f"it is the JWT in the Sleeper web app under localStorage key "
             f"'token' (DevTools > Application > Local Storage > sleeper.com). "
-            f"It is account-scoped and lasts about a year. Reads need no token "
-            f"at all.")
+            f"It is account-scoped and lasts about a year. Most reads need no "
+            f"token.")
 
 
 async def gql(query: str, variables: dict | None = None,
