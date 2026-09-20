@@ -560,7 +560,7 @@ async def pickem_status(week: int = 0, pickem_league: str = "",
     won = winners(games)
 
     out = [f"Pick'em {leg.get('leg_id')} ({leg.get('status')}) — "
-           f"{len(picks)} of {exp} picks made", ""]
+           f"{len(picks)} of {exp} picks made   (kickoffs in UTC)", ""]
     correct = wrong = 0
     for g in games:
         gid = str(g.get("game_id"))
