@@ -411,5 +411,5 @@ def scored(stats: dict, scoring: dict) -> float:
     touchdowns, TE premium. `league.scoring_settings` is the league's actual
     rulebook, so weekly value is computed from raw components against it.
     """
-    return round(sum(scoring.get(k, 0) * v for k, v in stats.items()
-                     if isinstance(v, (int, float))), 2)
+    from .shares import points_under
+    return round(points_under(stats, scoring), 2)
