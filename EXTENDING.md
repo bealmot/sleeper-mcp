@@ -42,7 +42,8 @@ inert and explain the format.
 ~11,000 players including retired ones, and names are not unique — "Kenneth
 Walker" matches two, one of them inactive. A format keyed by name eventually
 attaches your signal to the wrong person, and the failure is silent. Ids come
-from `/v1/players/nfl`, and `player_news` prints one for any player you name.
+from `/v1/players/nfl`; `player_news`, `player_outlook`, `usage` and
+`player_history` print `id=` in their first line for any player you name.
 
 **Scores are compared as percentiles within position.** Your units never have
 to match anyone's. A conviction count, a 1–100 rating and a positional rank all
@@ -66,15 +67,24 @@ Every tool in this server is a plain async function with a decorator. Yours can
 be too:
 
 ```python
-from sleeper_mcp.client import mcp, rest, gql, league_id, players, scored
+from sleeper_mcp.client import READ, tool, rest, gql, league_id, players, scored
 
-@mcp.tool()
+@tool(annotations=READ)
 async def my_tool(league_id_: str = "") -> str:
-    """One line describing it. This text is what the model reads."""
+    """One line describing it. This text is what the model reads.
+
+    Args:
+        league_id_: Defaults to SLEEPER_LEAGUE_ID.
+    """
     lg = league_id(league_id_ or None)
     rosters = await rest(f"/league/{lg}/rosters")
     return f"{len(rosters)} teams"
 ```
+
+Use `READ` for reads and `WRITE` for mutations so MCP hosts can tell them
+apart. If your tool issues a GraphQL operation the server does not already
+use, add its name to `ALLOWED` in `boundaries.py` — the guard refuses unknown
+operations by default, on purpose.
 
 Import it in your own entry point alongside `sleeper_mcp.server`, or fork and
 add a module — `server.py` registers tools purely by importing them.
@@ -88,8 +98,19 @@ add a module — `server.py` registers tools purely by importing them.
 | `players()` | The full player dictionary |
 | `league(id)` / `starting_slots(id)` | League config; slots in order, bench filtered |
 | `scored(stats, scoring)` | Projection components against a league's own rules |
-| `league_id()` / `roster_id()` | Config resolution with helpful errors |
+| `league_id()` / `roster_id()` | Config resolution with helpful errors, and validation |
 | `require_writes(action)` | Gate a mutation behind the two opt-ins |
+
+| From `lookup.py` | Does |
+|---|---|
+| `find_player(P, name, pool=)` | Every match for a name or id; defences by code, city or nickname |
+| `resolve_names(P, names, pool, label)` | Names -> ids against a known pool, or the problems |
+| `display_name(v, pid)` | A printable name for any entry, defences included |
+
+| From `txn.py` | Does |
+|---|---|
+| `pending(league_id)` | Pending transactions from the source that carries claims |
+| `render(t, P, owner)` | One transaction as lines, trades grouped by what each side gets |
 
 | From `optimizer.py` | Does |
 |---|---|
@@ -112,7 +133,9 @@ for half-PPR, first-down, or TE-premium leagues. Use `scored()` with
 `set_lineup` is positional. A hardcoded slot array does not error — it silently
 starts players in the wrong slots.
 
-**Resolve names against a roster, not the dictionary.** See above.
+**Resolve names against a roster, not the dictionary.** Use
+`lookup.resolve_names` with the roster as the pool; it handles defences and
+two-way players and never guesses between namesakes.
 
 **Never verify a write with REST.** It is Cloudflare-cached and will return
 pre-write state. Read back over GraphQL, through a different query than the one
