@@ -462,22 +462,28 @@ async def rest(path: str):
     if m := re.fullmatch(r"/league/\d+/matchups/(\d+)", path):
         wk = int(m.group(1))
         done = wk < WEEK
+        # In the CURRENT week the AAA-BBB game is final (see _games), so the
+        # AAA and BBB players have banked points and everyone else sits at 0.
+        cur = wk == WEEK
+        pp1 = ({"qb1": 21.0, "rb1": 17.0, "wr1": 13.0, "te1": 5.0, "rb3": 4.5,
+                "k1": 9.0, "AAA": 3.0, "wr_ir": 0.0, "db1": 6.5} if done else
+               {"qb1": 24.0, "rb1": 15.0, "wr1": 11.0, "te1": 6.0, "rb3": 0.0,
+                "k1": 8.0, "AAA": 4.0, "wr_ir": 0.0, "db1": 0.0} if cur else
+               {p: 0.0 for p in ROSTERS[0]["players"]})
+        pp2 = ({"rb2": 6.5, "wr2": 8.0, "fb1": 0.5} if done else
+               {"rb2": 7.0, "wr2": 9.0, "fb1": 0.0} if cur else
+               {"rb2": 0.0, "wr2": 0.0, "fb1": 0.0})
+        st1 = STATE["starters"].get((1, wk), ["qb1", "rb1", "wr1", "te1", "rb3", "k1", "AAA"])
         return [{"roster_id": 1, "matchup_id": 1,
-                 "points": 100.0 if done else 0.0,
-                 "starters": STATE["starters"].get((1, wk), ["qb1", "rb1", "wr1", "te1", "rb3", "k1", "AAA"]),
-                 "starters_points": [21.0, 17.0, 13.0, 5.0, 4.5, 9.0, 3.0] if done else [0.0] * 7,
-                 "players": ROSTERS[0]["players"],
-                 "players_points": ({"qb1": 21.0, "rb1": 17.0, "wr1": 13.0, "te1": 5.0,
-                                     "rb3": 4.5, "k1": 9.0, "AAA": 3.0, "wr_ir": 0.0,
-                                     "db1": 6.5} if done else
-                                    {p: 0.0 for p in ROSTERS[0]["players"]})},
+                 "points": round(sum(pp1.get(p, 0.0) for p in st1), 2),
+                 "starters": st1,
+                 "starters_points": [pp1.get(p, 0.0) for p in st1],
+                 "players": ROSTERS[0]["players"], "players_points": pp1},
                 {"roster_id": 2, "matchup_id": 1,
-                 "points": 90.0 if done else 0.0,
+                 "points": round(pp2["rb2"] + pp2["wr2"], 2),
                  "starters": ["rb2", "wr2"],
-                 "starters_points": [6.5, 8.0] if done else [0.0, 0.0],
-                 "players": ROSTERS[1]["players"],
-                 "players_points": {"rb2": 6.5, "wr2": 8.0, "fb1": 0.5} if done
-                 else {"rb2": 0.0, "wr2": 0.0, "fb1": 0.0}}]
+                 "starters_points": [pp2["rb2"], pp2["wr2"]],
+                 "players": ROSTERS[1]["players"], "players_points": pp2}]
     if re.fullmatch(r"/league/\d+/transactions/\d+", path):
         # REST NEVER CARRIES A PENDING WAIVER CLAIM, even at origin.
         return REST_TRANSACTIONS

@@ -21,15 +21,26 @@ async def call(tool, **kw):
 
 async def test_roster_names_the_manager_and_labels_projections(sleeper):
     from sleeper_mcp.reads import roster
-    out = await call(roster)
+    out = await call(roster, week=6)
     assert "Alder, roster 1" in out and "(projected)" in out
 
 
 async def test_roster_scores_against_the_leagues_own_keys(sleeper):
     """qb1 = 250*0.04 + 2*4 + 12*0.25 = 21.0 under the fixture's scoring."""
     from sleeper_mcp.reads import roster
-    out = await call(roster)
+    out = await call(roster, week=6)
     assert "Ant Quarterback           21.00" in out
+
+
+async def test_the_current_week_shows_banked_points_for_finished_games(sleeper):
+    """The AAA-BBB game is final in the current week: AAA and BBB players
+    show what they scored (F); everyone else still shows the projection."""
+    from sleeper_mcp.reads import roster
+    out = await call(roster)
+    assert "actual so far, projected otherwise" in out
+    assert "Ant Quarterback           24.00 F" in out         # AAA, final
+    assert "Jay Runner                 4.50      CCC" in out   # CCC, not yet played
+    assert "F = game final" in out
 
 
 async def test_an_ir_player_is_listed_under_ir_not_the_bench(sleeper):
@@ -70,7 +81,15 @@ async def test_matchup_without_a_token_still_shows_points(sleeper, monkeypatch):
     fake.no_token(monkeypatch)
     from sleeper_mcp.reads import matchup
     out = await call(matchup, week=3)
-    assert "need SLEEPER_TOKEN" in out and "100.0" in out
+    assert "need SLEEPER_TOKEN" in out and "72.5" in out
+
+
+async def test_the_current_week_matchup_merges_actual_so_far_from_the_feed(sleeper):
+    """GraphQL leaves `points` null mid-week; the public feed has the banked
+    points, and the line shows both."""
+    from sleeper_mcp.reads import matchup
+    out = await call(matchup)
+    assert "Alder* 68.0 / 101.0 proj" in out
 
 
 # --- standings ------------------------------------------------------------------

@@ -60,19 +60,26 @@ async def roster(league_id_: str = "", roster_id_: int = 0,
     taxi = {str(p) for p in (me.get("taxi") or [])}
     starters = [str(p) for p in (me.get("starters") or [])]
 
-    past = wk < now
+    past, live = wk < now, wk == now
     pts: dict = {}
+    actual: dict = {}
+    final: set = set()          # teams whose game this week is complete
+    playing: set = set()        # teams whose game is in progress
     label = "projected"
-    if past:
-        # THE LINEUP AS IT WAS, AND THE POINTS IT SCORED — from the matchup
-        # for that week, not today's roster with old projections.
+    if past or live:
+        # THE POINTS SCORED SO FAR, from the public matchup feed. For a past
+        # week that is the whole answer, with the lineup as it was set; for
+        # the current week it is what the players who have played banked.
         row = next((m for m in (await rest(f"/league/{lg}/matchups/{wk}") or [])
                     if m.get("roster_id") == rid), None)
         if row:
-            starters = [str(p) for p in (row.get("starters") or [])]
-            ids = [str(p) for p in (row.get("players") or ids)]
-            pts = {str(k): v for k, v in (row.get("players_points") or {}).items()}
-            label = "actual"
+            actual = {str(k): v for k, v in (row.get("players_points") or {}).items()}
+            if past:
+                starters = [str(p) for p in (row.get("starters") or [])]
+                ids = [str(p) for p in (row.get("players") or ids)]
+                pts, label = actual, "actual"
+    if live:
+        final, playing = await _game_state(lgd.get("season"), wk)
     if not pts and ids:
         d = await gql(
             '{stats_for_players_in_week(sport:"nfl",season:"%s",'
@@ -83,21 +90,33 @@ async def roster(league_id_: str = "", roster_id_: int = 0,
         pts = {r["player_id"]: scored(r["stats"], scoring)
                for r in (d.get("stats_for_players_in_week") or [])}
 
+    def value(pid):
+        """(points, tag): the actual score once his game is final or under
+        way, the projection otherwise."""
+        team = (P.get(pid) or {}).get("team")
+        if live and team in final:
+            return actual.get(pid, 0.0), "F"
+        if live and team in playing:
+            return actual.get(pid, 0.0), "live"
+        return pts.get(pid), ""
+
     def line(pid, slot=None):
         v = P.get(pid) or {}
-        p = pts.get(pid)
+        p, tag = value(pid)
         inj = f"  [{v['injury_status']}]" if v.get("injury_status") else ""
         return (f"  {slot or fantasy_position(v) or '?':5} "
                 f"{display_name(v, pid)[:24]:24} "
-                f"{'  --' if p is None else f'{p:6.2f}'}  "
+                f"{'  --' if p is None else f'{p:6.2f}'} {tag:4} "
                 f"{v.get('team') or '-'}{inj}")
 
+    if live and (final or playing):
+        label = "actual so far, projected otherwise"
     out = [f"{lgd.get('name')} — week {wk} ({label})   "
            f"{owner.get(rid, '?')}, roster {rid}", ""]
     out.append("STARTERS")
     for i, pid in enumerate(starters):
         out.append(line(pid, slots[i] if i < len(slots) else None))
-    total = sum(pts.get(p) or 0 for p in starters)
+    total = sum((value(p)[0] or 0) for p in starters)
     out.append(f"  {'':5} {'total':24} {total:6.2f}")
     bench = [i for i in ids if i not in starters and i not in reserve and i not in taxi]
     if bench:
@@ -108,8 +127,27 @@ async def roster(league_id_: str = "", roster_id_: int = 0,
         out += ["", "TAXI"] + [line(p) for p in sorted(taxi)]
     out.append("")
     out.append(f"  {label} points under {lgd.get('name')}'s own settings "
-               f"({len(scoring)} scoring keys), not pts_ppr")
+               f"({len(scoring)} scoring keys), not pts_ppr"
+               + ("; F = game final, live = in progress" if live and (final or playing) else ""))
     return "\n".join(out)
+
+
+async def _game_state(season, week: int) -> tuple[set, set]:
+    """(teams whose game is complete, teams whose game is in progress)."""
+    try:
+        games = await rest(f"/scores/nfl/regular/{season}/{week}") or []
+    except Exception:                                   # noqa: BLE001
+        return set(), set()
+    done, live = set(), set()
+    for g in games:
+        md = g.get("metadata") or {}
+        teams = {md.get("home_team"), md.get("away_team")} - {None}
+        st = g.get("status")
+        if st == "complete":
+            done |= teams
+        elif st and st != "pre_game":
+            live |= teams
+    return done, live
 
 
 @tool(annotations=READ)
@@ -149,13 +187,19 @@ async def matchup(league_id_: str = "", week: int = 0,
         why = ("projections need SLEEPER_TOKEN"
                if isinstance(e, (AuthError, ConfigError))
                else f"projections unavailable ({e.__class__.__name__})")
-    if not legs:
-        legs = [{"roster_id": m.get("roster_id"), "matchup_id": m.get("matchup_id"),
-                 "points": m.get("points"), "proj_points": None}
-                for m in (await rest(f"/league/{lg}/matchups/{wk}") or [])]
-
     played = wk < now
     live = wk == now
+    # The public feed carries actual-so-far during a week, which the GraphQL
+    # leg leaves null until the week closes. Merge it in.
+    feed = {m.get("roster_id"): m
+            for m in (await rest(f"/league/{lg}/matchups/{wk}") or [])}
+    if not legs:
+        legs = [{"roster_id": rid_, "matchup_id": m.get("matchup_id"),
+                 "points": m.get("points"), "proj_points": None}
+                for rid_, m in feed.items()]
+    for l in legs:
+        if not l.get("points") and feed.get(l.get("roster_id"), {}).get("points"):
+            l["points"] = feed[l["roster_id"]]["points"]
     by_m: dict = {}
     for l in legs:
         by_m.setdefault(l.get("matchup_id"), []).append(l)
