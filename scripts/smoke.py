@@ -33,7 +33,8 @@ GREEN, RED, DIM, OFF = "\033[32m", "\033[31m", "\033[2m", "\033[0m"
 
 
 def cases(season: str):
-    from sleeper_mcp import drafts, keepers, lineups, playoffs, reads, usage
+    from sleeper_mcp import (discovery, drafts, keepers, lineups, pickem,
+                             playoffs, reads, usage)
     past = {"season": season} if season else {}
     return [
         ("roster", reads.roster, {}),
@@ -52,10 +53,10 @@ def cases(season: str):
          {"player_name": "Josh Allen"}),
         ("pickem_status", reads.pickem_status, {}),
         ("pickem_consensus", reads.pickem_consensus, {}),
-        ("league_info", __import__("sleeper_mcp.discovery",
-                                   fromlist=["x"]).league_info, {}),
-        ("auth_status", __import__("sleeper_mcp.discovery",
-                                   fromlist=["x"]).auth_status, {}),
+        ("pickem_standings", pickem.pickem_standings, {}),
+        ("find_my_pools", pickem.find_my_pools, {}),
+        ("league_info", discovery.league_info, {}),
+        ("auth_status", discovery.auth_status, {}),
         ("waiver_targets", lineups.waiver_targets, {}),
         ("bye_outlook", lineups.bye_outlook, {}),
         ("playoff_odds", playoffs.playoff_odds, {"trials": 500}),
@@ -64,6 +65,7 @@ def cases(season: str):
         ("playoff_bracket", playoffs.playoff_bracket, {}),
         ("standings_trend", playoffs.standings_trend, {"previous": True}),
         ("keepers", keepers.keepers, {}),
+        ("player_news_def", reads.player_news, {"player_name": "Lions"}),
         ("usage", usage.usage, {"player_name": "Josh Allen", **past}),
         ("breakouts", usage.breakouts, {"weeks": 4, **past}),
         ("season_leaders", usage.season_leaders, {"position": "WR",

@@ -114,6 +114,7 @@ async def signal_divergence(min_evidence: int = 1, gap: int = 25,
         min_evidence: Ignore entries with less backing than this. Default 1.
         gap: Minimum percentile gap to report. Default 25.
         limit: Rows per direction. Default 15.
+        league_id_: Defaults to SLEEPER_LEAGUE_ID.
         week: NFL week. 0 (default) uses the current week.
     """
     sig, label = load()
@@ -200,7 +201,11 @@ async def signal_divergence(min_evidence: int = 1, gap: int = 25,
 @tool(annotations=READ)
 async def player_signal(player_name: str) -> str:
     """Requires SLEEPER_SIGNAL_FILE; inert otherwise. What your signal says
-    about one player, next to Sleeper's own view."""
+    about one player, next to Sleeper's own view.
+
+    Args:
+        player_name: Full or partial name, or a Sleeper player id.
+    """
     sig, label = load()
     if not sig:
         return _HOWTO if not label else f"Signal file {label}."
@@ -257,6 +262,8 @@ async def trade_targets(min_evidence: int = 1, limit: int = 12,
     Args:
         min_evidence: Ignore thin entries. Default 1.
         limit: Rows per category. Default 12.
+        league_id_: Defaults to SLEEPER_LEAGUE_ID.
+        roster_id_: Defaults to SLEEPER_ROSTER_ID.
     """
     sig, label = load()
     if not sig:
