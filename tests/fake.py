@@ -542,12 +542,16 @@ def _rosters_gql():
 
 
 async def gql(query: str, variables=None, auth: bool = False):
-    from sleeper_mcp.client import AuthError
+    from sleeper_mcp import client
+    from sleeper_mcp.client import AuthError, ConfigError
     _policy(query)
     q = " ".join(query.split())
     kind, op = op_name(q)
     if (op in AUTHED or kind == "mutation") and not auth:
         raise AuthError(f"Unauthorized (fake): {op} needs auth=True")
+    if auth and not client.TOKEN:
+        # What the real client does: refuse before any request is built.
+        raise ConfigError("This query is authenticated and SLEEPER_TOKEN is not set.")
     if op in FAIL:
         FAIL.discard(op)
         raise RuntimeError(f"fake: injected failure for {op}")
@@ -653,6 +657,8 @@ async def gql(query: str, variables=None, auth: bool = False):
     if op == "messages":
         # Two pages: without `before` the newest 50, with it the older ones.
         before = re.search(r'before:"?(\w+)', q)
+        if before and before.group(1) == "m0":
+            return {"messages": []}
         if before:
             return {"messages": [{"message_id": "m0", "created": 1757000000000,
                                   "author_display_name": "Yew", "text": "old trade talk",
