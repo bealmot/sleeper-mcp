@@ -62,6 +62,8 @@ class Session:
     result: str | None = None           # set once, never contains the token
     done: threading.Event = field(default_factory=threading.Event)
     _server: object = None
+    _lock: threading.Lock = field(default_factory=threading.Lock)
+    _busy: bool = False
 
     @property
     def url(self) -> str:
@@ -74,60 +76,94 @@ class Session:
     def matches(self, nonce: str) -> bool:
         return hmac.compare_digest(nonce or "", self.nonce)
 
-    def accept(self, raw: str) -> tuple[int, dict]:
-        """Validate, verify and save. Returns (http status, json body)."""
-        if self.done.is_set():
-            return 410, {"ok": False, "message": "this setup link was already used"}
-        if self.expired:
-            return 410, {"ok": False, "message": "this setup link has expired"}
-        tok = normalise(raw)
-        problems = config.diagnose_token(tok)
-        if problems:
-            return 400, {"ok": False, "message": "not saved — the token "
-                                                  + "; ".join(problems)}
-        ok, msg = self.verify(tok)
-        if not ok:
-            return 400, {"ok": False, "message": f"not saved — {msg}"}
-        updates = {"token": tok}
-        if self.enable_writes:
-            updates["enable_writes"] = "1"
-        config.save(updates)
-        # Make the running server use it immediately, no restart needed.
-        from . import client
-        client.TOKEN = tok
-        if self.enable_writes:
-            client.WRITES_ENABLED = True
-        self.result = (f"token verified and saved for {msg}; writes "
-                       f"{'enabled' if self.enable_writes else 'unchanged'}")
-        self.done.set()
-        return 200, {"ok": True, "message": self.result}
+    def accept(self, raw: str, writes: bool = False) -> tuple[int, dict]:
+        """Validate, verify and save. Returns (http status, json body).
+
+        SINGLE USE IS ENFORCED UNDER A LOCK. verify() is a network round trip
+        of up to thirty seconds, and two submissions inside that window used
+        to both pass the "already used" check, both save, and both report
+        success — with whichever finished last silently winning.
+
+        Writes are enabled only when BOTH the session was started with
+        enable_writes AND the page's request says the user ticked the box.
+        """
+        with self._lock:
+            if self.done.is_set():
+                return 410, {"ok": False, "message": "this setup link was already used"}
+            if self.expired:
+                return 410, {"ok": False, "message": "this setup link has expired"}
+            if self._busy:
+                return 409, {"ok": False, "message": "a submission is already being verified"}
+            self._busy = True
+        try:
+            tok = normalise(raw)
+            problems = config.diagnose_token(tok)
+            if problems:
+                return 400, {"ok": False, "message": "not saved — the token "
+                                                      + "; ".join(problems)}
+            ok, msg = self.verify(tok)
+            if not ok:
+                return 400, {"ok": False, "message": f"not saved — {msg}"}
+            enable = bool(self.enable_writes and writes)
+            updates = {"token": tok}
+            if enable:
+                updates["enable_writes"] = "1"
+            with self._lock:
+                if self.done.is_set():
+                    return 410, {"ok": False, "message": "this setup link was already used"}
+                config.save(updates)
+                # Make the running server use it immediately, no restart needed,
+                # and tell the diagnostics where it came from.
+                from . import client
+                client.TOKEN = tok
+                config._SOURCE["SLEEPER_TOKEN"] = "config file"
+                if enable:
+                    client.WRITES_ENABLED = True
+                    config._SOURCE["SLEEPER_ENABLE_WRITES"] = "config file"
+                self.result = (f"token verified and saved for {msg}; writes "
+                               f"{'ENABLED' if enable else 'unchanged'}")
+                self.done.set()
+            return 200, {"ok": True, "message": self.result}
+        finally:
+            with self._lock:
+                self._busy = False
 
 
 def _page(s: Session) -> str:
     base = f"http://127.0.0.1:{s.port}"
     post = f"{base}/token/{s.nonce}"
-    snippet = (f'fetch("{post}",{{method:"POST",headers:{{"content-type":'
+    # The snippet is built by the page at click time so the writes flag
+    # reflects the checkbox, not the tool argument.
+    snippet = (f'fetch("{post}"+W,{{method:"POST",headers:{{"content-type":'
                f'"text/plain"}},body:localStorage.getItem("token")}})'
                f'.then(r=>r.json()).then(j=>console.log("sleeper-mcp: "+j.message))'
                f'.catch(()=>console.log("sleeper-mcp: blocked — run '
                f'copy(localStorage.token) and paste it into the setup page"))')
     e = html.escape
+    writes_box = ""
+    if s.enable_writes:
+        writes_box = """<div style="border:2px solid #a11;padding:.8em 1em;margin:1em 0;background:#fff4f4">
+<b>This link was opened with writes requested.</b> Ticking the box below lets the
+assistant SET LINEUPS, CLAIM PLAYERS and PROPOSE TRADES in your leagues (each
+still dry-runs unless confirmed). Leave it unticked to stay read-only.<br>
+<label><input type="checkbox" id="writes" checked onchange="upd()"> Also enable writes</label></div>"""
     return f"""<!doctype html><meta charset="utf-8"><title>sleeper-mcp setup</title>
 <style>body{{font:15px/1.5 system-ui,sans-serif;max-width:46em;margin:3em auto;padding:0 1em;color:#222}}
 code,pre{{background:#f3f3f3;padding:.15em .35em;border-radius:4px}}pre{{padding:.8em;overflow:auto;white-space:pre-wrap;word-break:break-all}}
-h2{{margin-top:2em;font-size:1.1em}}input{{width:100%;padding:.5em;font:inherit}}button{{padding:.5em 1em;font:inherit}}
+h2{{margin-top:2em;font-size:1.1em}}input[type=password]{{width:100%;padding:.5em;font:inherit}}button{{padding:.5em 1em;font:inherit}}
 .ok{{color:#176b2a}}.bad{{color:#a11}}small{{color:#666}}</style>
 <h1>sleeper-mcp — add your Sleeper token</h1>
 <p>This page is served by the sleeper-mcp process on your own machine, at a
 one-time address that expires in 5 minutes. The token goes from your browser
 to that process and into <code>{e(str(config.config_path()))}</code> (mode 0600).
 It is never shown, logged, or sent anywhere but Sleeper (once, to verify it).</p>
+{writes_box}
 
 <h2>Option 1 — one line, nothing to copy <small>(recommended)</small></h2>
 <p>In the tab where you are logged in to <b>sleeper.com</b>, open the developer
 console (<kbd>F12</kbd> or <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>Shift</kbd>+<kbd>J</kbd>,
 then the <b>Console</b> tab), paste this, press Enter:</p>
-<pre id="snip">{e(snippet)}</pre>
+<pre id="snip"></pre>
 <p><button onclick="navigator.clipboard.writeText(document.getElementById('snip').textContent)">copy snippet</button>
 <small>Browsers warn about pasting into the console for good reason — read it: it
 sends <code>localStorage.token</code> to <code>127.0.0.1</code>, nowhere else.</small></p>
@@ -148,9 +184,13 @@ Quotes around it are fine; they are removed.</p>
 <p>Copy the value and use Option 2. The token is account-scoped and lasts about
 a year; to revoke it, log out of Sleeper everywhere.</p>
 <script>
+const SNIP={json.dumps(snippet)};
+function W(){{const b=document.getElementById('writes');return (b&&b.checked)?'?writes=1':'';}}
+function upd(){{document.getElementById('snip').textContent=SNIP.replace('"+W',JSON.stringify(W())+'+"').replace('+""+"','');}}
+upd();
 async function send(ev){{ev.preventDefault();const out=document.getElementById('out');
 const tok=ev.target.token.value;ev.target.token.value='';
-try{{const r=await fetch({json.dumps(post)},{{method:'POST',headers:{{'content-type':'text/plain'}},body:tok}});
+try{{const r=await fetch({json.dumps(post)}+W(),{{method:'POST',headers:{{'content-type':'text/plain'}},body:tok}});
 const j=await r.json();out.className=j.ok?'ok':'bad';out.textContent=j.message;
 if(j.ok){{try{{await navigator.clipboard.writeText('');}}catch(_){{}}}}}}
 catch(e){{out.className='bad';out.textContent='could not reach the local server — has the link expired?';}}return false;}}
@@ -202,6 +242,10 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         parts = urllib.parse.urlsplit(self.path).path.strip("/").split("/")
         return (parts[0], parts[1]) if len(parts) == 2 else ("", "")
 
+    def _writes_flag(self) -> bool:
+        q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+        return q.get("writes", [""])[0] == "1"
+
     def do_GET(self):
         kind, nonce = self._route()
         s = self.session
@@ -230,10 +274,23 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 raw = str(json.loads(raw).get("token", ""))
             except (ValueError, AttributeError):
                 raw = ""
-        status, body = s.accept(raw)
+        status, body = s.accept(raw, writes=self._writes_flag())
         self._send(status, json.dumps(body).encode(), "application/json", cors=True)
         if s.done.is_set():
-            threading.Thread(target=self.server.shutdown, daemon=True).start()
+            threading.Thread(target=_stop, args=(self.server,), daemon=True).start()
+
+
+def _stop(srv) -> None:
+    """Stop serving AND close the listening socket. shutdown() alone leaves
+    the port bound for the life of the process, so a re-opened link hangs in
+    the backlog instead of being refused."""
+    try:
+        srv.shutdown()
+    finally:
+        try:
+            srv.server_close()
+        except OSError:
+            pass
 
 
 def start(enable_writes: bool = False, verify=None, ttl: float = TTL) -> Session:
@@ -251,7 +308,7 @@ def start(enable_writes: bool = False, verify=None, ttl: float = TTL) -> Session
 
     def reaper():
         s.done.wait(ttl)
-        srv.shutdown()
+        _stop(srv)
         if not s.done.is_set():
             s.result = "setup link expired unused"
             s.done.set()

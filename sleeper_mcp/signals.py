@@ -53,8 +53,8 @@ from __future__ import annotations
 import json
 import os
 
-from .client import (current_week, gql, league, league_id, mcp, players, rest,
-                     roster_id, scored)
+from .client import (READ, current_week, gql, league, league_id, players,
+                     rest, roster_id, scored, tool)
 from .optimizer import percentile_within as _pct_within
 
 SIGNAL_FILE = (os.environ.get("SLEEPER_SIGNAL_FILE") or "").strip()
@@ -95,11 +95,12 @@ def load() -> tuple[dict, str]:
     return rows, label
 
 
-@mcp.tool()
+@tool(annotations=READ)
 async def signal_divergence(min_evidence: int = 1, gap: int = 25,
                             limit: int = 15, league_id_: str = "",
                             week: int = 0) -> str:
-    """Where your signal and Sleeper's projection disagree most.
+    """Requires SLEEPER_SIGNAL_FILE; inert otherwise. Where your signal and
+    Sleeper's projection disagree most.
 
     Both sides are converted to percentile ranks WITHIN POSITION, so a
     conviction count and a points projection become comparable without either
@@ -113,6 +114,7 @@ async def signal_divergence(min_evidence: int = 1, gap: int = 25,
         min_evidence: Ignore entries with less backing than this. Default 1.
         gap: Minimum percentile gap to report. Default 25.
         limit: Rows per direction. Default 15.
+        league_id_: Defaults to SLEEPER_LEAGUE_ID.
         week: NFL week. 0 (default) uses the current week.
     """
     sig, label = load()
@@ -196,9 +198,14 @@ async def signal_divergence(min_evidence: int = 1, gap: int = 25,
     return "\n".join(out)
 
 
-@mcp.tool()
+@tool(annotations=READ)
 async def player_signal(player_name: str) -> str:
-    """What your signal says about one player, next to Sleeper's own view."""
+    """Requires SLEEPER_SIGNAL_FILE; inert otherwise. What your signal says
+    about one player, next to Sleeper's own view.
+
+    Args:
+        player_name: Full or partial name, or a Sleeper player id.
+    """
     sig, label = load()
     if not sig:
         return _HOWTO if not label else f"Signal file {label}."
@@ -225,10 +232,11 @@ async def player_signal(player_name: str) -> str:
     return "\n".join(out)
 
 
-@mcp.tool()
+@tool(annotations=READ)
 async def trade_targets(min_evidence: int = 1, limit: int = 12,
                         league_id_: str = "", roster_id_: int = 0) -> str:
-    """Mispriced players on RIVAL rosters, using revealed preference.
+    """Requires SLEEPER_SIGNAL_FILE; inert otherwise. Mispriced players on
+    RIVAL rosters, using revealed preference.
 
     This works with ANY signal source, including a plain ranking.
 
@@ -254,6 +262,8 @@ async def trade_targets(min_evidence: int = 1, limit: int = 12,
     Args:
         min_evidence: Ignore thin entries. Default 1.
         limit: Rows per category. Default 12.
+        league_id_: Defaults to SLEEPER_LEAGUE_ID.
+        roster_id_: Defaults to SLEEPER_ROSTER_ID.
     """
     sig, label = load()
     if not sig:

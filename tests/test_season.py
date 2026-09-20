@@ -161,10 +161,42 @@ def test_seeded_runs_reproduce():
 
 def test_team_strength_reports_its_own_evidence():
     st = team_strength({1: [100.0], 2: [140.0]})
-    for _mu, _sd, n, ev in st.values():
+    for _mu, sd, n, ev, tau in st.values():
         assert n == 1
         assert ev < 0.25
+        assert 0 < tau < sd            # unsure of mu, but less than a week's noise
     assert st[2][0] > st[1][0]          # ordering survives shrinkage
+
+
+def test_uncertainty_in_strength_widens_the_odds():
+    """Same mu, same sd: adding tau must pull a win probability toward 0.5,
+    and a simulation with tau must be less certain than one without."""
+    assert win_probability(120.0, 25.0, 100.0, 25.0, 10.0, 10.0) < \
+        win_probability(120.0, 25.0, 100.0, 25.0)
+    records = {t: (0, 0, 0, 0.0) for t in range(1, 5)}
+    schedule = [(w, a, b) for w in range(1, 9) for a, b in ((1, 2), (3, 4))]
+    sure = {1: (130.0, 25.0), 2: (100.0, 25.0), 3: (110.0, 25.0), 4: (110.0, 25.0)}
+    unsure = {t: (mu, sd, 15.0) for t, (mu, sd) in sure.items()}
+    a = simulate(records, schedule, sure, playoff_teams=2, trials=1500, seed=1)
+    b = simulate(records, schedule, unsure, playoff_teams=2, trials=1500, seed=1)
+    assert b[1]["playoff"] < a[1]["playoff"]
+    assert b[2]["playoff"] > a[2]["playoff"]
+
+
+def test_a_median_match_league_awards_two_results_a_week():
+    records = {t: (0, 0, 0, 0.0) for t in range(1, 5)}
+    schedule = [(1, 1, 2), (1, 3, 4)]
+    strength = {t: (110.0, 25.0) for t in records}
+    res = simulate(records, schedule, strength, playoff_teams=2, trials=400,
+                   seed=3, median_match=True)
+    total = sum(r["mean_wins"] for r in res.values())
+    assert abs(total - 4.0) < 1e-9          # 2 head-to-head + 2 median wins per week
+
+
+def test_a_one_sided_zero_in_a_finished_week_counts_for_both():
+    """A team that never set a lineup lost; its opponent's score is real."""
+    scores, remaining = split_games([(1, [(1, 0.0, 2, 98.0)])], current_week=3)
+    assert scores == {1: [0.0], 2: [98.0]} and remaining == []
 
 
 # --- split_games ------------------------------------------------------------

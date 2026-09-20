@@ -101,14 +101,20 @@ def league_scoring(scores: dict[int, list[float]]) -> tuple[float, float]:
 
 def team_strength(scores: dict[int, list[float]],
                   prior_games: float = PRIOR_GAMES,
-                  ) -> dict[int, tuple[float, float, int, float]]:
-    """-> {team: (mu, sd, games, evidence)}.
+                  ) -> dict[int, tuple[float, float, int, float, float]]:
+    """-> {team: (mu, sd, games, evidence, tau)}.
 
     mu is the team's shrunk expected score. sd is the league-wide weekly noise,
     used for every team rather than each team's own: separating a team that is
     genuinely volatile from one that had two odd weeks needs far more data than
     a fantasy season contains, and a per-team sd fitted to three games mostly
     fits noise.
+
+    tau IS HOW UNSURE mu ITSELF IS: sd / sqrt(n + prior_games). Reporting
+    "80% prior" and then simulating with mu fixed to the decimal is exactly the
+    false confidence this module exists to avoid — in week 2 the posterior
+    spread of mu (about ±10 points) is as wide as the whole strength table.
+    simulate() and win_probability() widen by it.
     """
     lg_mean, lg_sd = league_scoring(scores)
     out = {}
@@ -116,19 +122,22 @@ def team_strength(scores: dict[int, list[float]],
         n = len(team_scores)
         obs = sum(team_scores) / n if n else lg_mean
         out[team] = (shrink(obs, n, lg_mean, prior_games), lg_sd, n,
-                     evidence_weight(n, prior_games))
+                     evidence_weight(n, prior_games),
+                     lg_sd / math.sqrt(n + prior_games))
     return out
 
 
-def win_probability(mu_a: float, sd_a: float, mu_b: float, sd_b: float) -> float:
+def win_probability(mu_a: float, sd_a: float, mu_b: float, sd_b: float,
+                    tau_a: float = 0.0, tau_b: float = 0.0) -> float:
     """P(A outscores B), treating both scores as independent normals.
 
-    A - B is then normal with mean mu_a - mu_b and variance sd_a^2 + sd_b^2, so
-    the answer is one normal CDF. Fantasy scores are not exactly normal — they
-    are mildly right-skewed — but the error from that is far smaller than the
+    A - B is then normal with mean mu_a - mu_b and variance
+    sd_a^2 + sd_b^2 (+ tau_a^2 + tau_b^2, the uncertainty in each mu), so the
+    answer is one normal CDF. Fantasy scores are not exactly normal — they are
+    mildly right-skewed — but the error from that is far smaller than the
     error in mu, so a heavier model would be false precision.
     """
-    var = sd_a ** 2 + sd_b ** 2
+    var = sd_a ** 2 + sd_b ** 2 + tau_a ** 2 + tau_b ** 2
     if var <= 0:
         return 0.5 if mu_a == mu_b else float(mu_a > mu_b)
     return 0.5 * (1.0 + math.erf((mu_a - mu_b) / math.sqrt(2.0 * var)))
@@ -136,20 +145,28 @@ def win_probability(mu_a: float, sd_a: float, mu_b: float, sd_b: float) -> float
 
 def simulate(records: dict[int, tuple[int, int, int, float]],
              schedule: list[tuple[int, int, int]],
-             strength: dict[int, tuple[float, float]],
+             strength: dict[int, tuple],
              playoff_teams: int,
              trials: int = DEFAULT_TRIALS,
-             seed: int | None = None) -> dict[int, dict[str, float]]:
+             seed: int | None = None,
+             median_match: bool = False) -> dict[int, dict[str, float]]:
     """Monte-Carlo the rest of the season.
 
     Args:
         records: {team: (wins, losses, ties, points_for)} so far.
         schedule: remaining games as (week, team_a, team_b).
-        strength: {team: (mu, sd)} per team-week.
+        strength: {team: (mu, sd)} or (mu, sd, tau) per team-week. With tau,
+            each trial first draws the team's TRUE strength from N(mu, tau),
+            so the season's uncertainty about mu widens the odds instead of
+            being reported and then ignored.
         playoff_teams: how many qualify.
         trials: simulations. 10k puts the standard error near 0.5pp, which is
             below the resolution anyone should read off a fantasy forecast.
         seed: fix it for reproducible output and for tests.
+        median_match: Sleeper's "league median" setting — every week each
+            team also gets a win or a loss for finishing above or below the
+            league's median score. Without it the banked records (two results
+            a week) and the simulated ones (one) are in different units.
 
     Returns {team: {playoff, top_seed, mean_wins, mean_points}}.
 
@@ -163,24 +180,41 @@ def simulate(records: dict[int, tuple[int, int, int, float]],
     top = dict.fromkeys(teams, 0)
     tot_w = dict.fromkeys(teams, 0.0)
     tot_p = dict.fromkeys(teams, 0.0)
+    by_week: dict[int, list] = {}
+    for w, a, b in schedule:
+        by_week.setdefault(w, []).append((a, b))
 
     for _ in range(trials):
         wins = {t: float(records[t][0]) + 0.5 * records[t][2] for t in teams}
         pts = {t: records[t][3] for t in teams}
-        for _week, a, b in schedule:
-            mu_a, sd_a = strength[a]
-            mu_b, sd_b = strength[b]
-            sa = rng.gauss(mu_a, sd_a) if sd_a > 0 else mu_a
-            sb = rng.gauss(mu_b, sd_b) if sd_b > 0 else mu_b
-            pts[a] += sa
-            pts[b] += sb
-            if sa > sb:
-                wins[a] += 1
-            elif sb > sa:
-                wins[b] += 1
-            else:
-                wins[a] += 0.5
-                wins[b] += 0.5
+        mu = {}
+        for t in teams:
+            st = strength[t]
+            tau = st[2] if len(st) > 2 else 0.0
+            mu[t] = rng.gauss(st[0], tau) if tau > 0 else st[0]
+        for _week, games in by_week.items():
+            week_scores = {}
+            for a, b in games:
+                sd_a, sd_b = strength[a][1], strength[b][1]
+                sa = rng.gauss(mu[a], sd_a) if sd_a > 0 else mu[a]
+                sb = rng.gauss(mu[b], sd_b) if sd_b > 0 else mu[b]
+                pts[a] += sa
+                pts[b] += sb
+                week_scores[a], week_scores[b] = sa, sb
+                if sa > sb:
+                    wins[a] += 1
+                elif sb > sa:
+                    wins[b] += 1
+                else:
+                    wins[a] += 0.5
+                    wins[b] += 0.5
+            if median_match and len(week_scores) > 1:
+                ordered = sorted(week_scores.values())
+                n = len(ordered)
+                med = (ordered[n // 2] if n % 2 else
+                       (ordered[n // 2 - 1] + ordered[n // 2]) / 2)
+                for t, sc in week_scores.items():
+                    wins[t] += 1.0 if sc > med else 0.0 if sc < med else 0.5
         # Shuffle before the stable sort so EXACT ties resolve at random.
         # Sorting the list as-is breaks them by roster id, which is invisible
         # with real scores and catastrophic without them: identical teams then
@@ -220,14 +254,18 @@ def split_games(weeks: list[tuple[int, list[tuple[int, float, int, float]]]],
     completely ordinary. Ask the calendar, not the numbers.
 
     The points check that remains is a second guard, for a game inside a past
-    week that never scored — a postponement, or a roster that was never set.
+    week that never scored on EITHER side — a postponement. A finished week
+    where one team scored zero is a real game: the manager who never set a
+    lineup lost it, and that zero is the strongest evidence in the league that
+    the team is dead. Dropping the pair used to throw away the opponent's real
+    score too, and left the abandoned team modelled as league-average.
     """
     scores: dict[int, list[float]] = {}
     remaining: list[tuple[int, int, int]] = []
     for week, pairs in weeks:
         finished = week < current_week
         for ra, pa, rb, pb in pairs:
-            if finished and pa > 0 and pb > 0:
+            if finished and (pa > 0 or pb > 0):
                 scores.setdefault(ra, []).append(pa)
                 scores.setdefault(rb, []).append(pb)
             elif not finished:

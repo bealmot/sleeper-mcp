@@ -72,8 +72,18 @@ def classify(txn: dict, player_id: str) -> dict | None:
         how = "roster reset"
 
     # Everyone else in the same transaction — who he was picked up over, or
-    # who came back the other way in a trade.
+    # who came back the other way in a trade. In a trade, DIRECTION MATTERS:
+    # a team-mate who moved WITH him is not what he was traded FOR.
     others = sorted({p for p in list(adds) + list(drops) if p != pid})
+    with_him = sorted(p for p, r in adds.items()
+                      if p != pid and kind == TRADED and r == to_roster)
+    returned = sorted(p for p, r in adds.items()
+                      if p != pid and kind == TRADED and r == from_roster)
+    picks_back = []
+    for raw in (txn.get("draft_picks") or []):
+        pk = parse_draft_pick(raw)
+        if pk and kind == TRADED and pk.get("owner_id") == from_roster:
+            picks_back.append(pk)
     return {
         "kind": kind,
         "how": how,
@@ -84,8 +94,14 @@ def classify(txn: dict, player_id: str) -> dict | None:
         "to_roster": to_roster,
         "from_roster": from_roster,
         "others": others,
-        "faab": txn.get("waiver_budget"),
+        "with": with_him,
+        "for": returned,
+        "picks_for": picks_back,
+        # The bid lives in settings.waiver_bid. `waiver_budget` is the list
+        # of FAAB transfers inside a trade, and was read here by mistake.
+        "faab": (txn.get("settings") or {}).get("waiver_bid"),
         "status": txn.get("status"),
+        "league_id": txn.get("league_id"),
     }
 
 

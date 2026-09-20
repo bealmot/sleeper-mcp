@@ -199,3 +199,54 @@ def test_a_lineup_too_wide_to_solve_exactly_still_returns():
     total, assign = best_lineup(roster(25), slots)
     assert len(assign) == len(slots)
     assert total > 0
+
+
+# --- eligibility by fantasy_positions, and zero-point legality ---------------
+
+def test_a_two_way_player_fills_the_slot_his_fantasy_positions_allow():
+    """Listed at DB, eligible at WR. Judged on `position` alone he could
+    never start; judged on fantasy_positions he is the only receiver."""
+    from sleeper_mcp.optimizer import best_lineup
+    pool = [{"pos": "DB", "positions": {"DB", "WR"}, "pts": 9.0, "name": "Hunter"}]
+    total, assign = best_lineup(pool, ["WR"])
+    assert total == 9.0 and assign[0]["name"] == "Hunter"
+
+
+def test_a_fullback_fills_a_running_back_slot():
+    from sleeper_mcp.optimizer import best_lineup
+    pool = [{"pos": "FB", "positions": {"RB"}, "pts": 2.0, "name": "Ricard"}]
+    assert best_lineup(pool, ["RB"])[1][0]["name"] == "Ricard"
+
+
+def test_a_zero_point_player_still_fills_an_otherwise_empty_slot():
+    """Legality is eligibility, not points. A defence projecting 0.0 (or
+    negative, under pts_allow scoring) is a legal starter and the slot is
+    NOT a hole."""
+    from sleeper_mcp.optimizer import best_lineup, holes
+    pool = [{"pos": "QB", "pts": 20.0}, {"pos": "DEF", "pts": 0.0},
+            {"pos": "K", "pts": -1.0}]
+    total, assign = best_lineup(pool, ["QB", "DEF", "K"])
+    assert all(a is not None for a in assign)
+    assert total == 19.0
+    assert holes(pool, ["QB", "DEF", "K"]) == []
+
+
+def test_filling_a_slot_beats_leaving_it_empty_even_at_a_loss():
+    from sleeper_mcp.optimizer import best_lineup
+    pool = [{"pos": "RB", "pts": 10.0}, {"pos": "RB", "pts": -2.0}]
+    total, assign = best_lineup(pool, ["RB", "FLEX"])
+    assert all(a is not None for a in assign) and total == 8.0
+
+
+def test_the_prune_keeps_a_multi_position_player_once():
+    from sleeper_mcp.optimizer import _prune
+    hunter = {"pos": "DB", "positions": {"DB", "WR"}, "pts": 9.0}
+    kept = _prune([hunter, {"pos": "WR", "pts": 12.0}], ["WR", "DB"])
+    assert kept.count(hunter) == 1 and len(kept) == 2
+
+
+def test_eligible_accepts_a_set_or_a_string():
+    from sleeper_mcp.optimizer import eligible
+    assert eligible("FLEX", "RB") and not eligible("FLEX", "QB")
+    assert eligible("WR", {"DB", "WR"}) and not eligible("WR", {"DB"})
+    assert not eligible("WR", set()) and not eligible("WR", None)

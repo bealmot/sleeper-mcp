@@ -11,6 +11,7 @@ from . import discovery as _discovery  # noqa: F401
 from . import drafts as _drafts        # noqa: F401
 from . import keepers as _keepers      # noqa: F401
 from . import lineups as _lineups      # noqa: F401
+from . import pickem as _pickem        # noqa: F401
 from . import playoffs as _playoffs    # noqa: F401
 from . import reads as _reads          # noqa: F401
 from . import signals as _signals      # noqa: F401  (inert without a file)

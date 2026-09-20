@@ -26,15 +26,32 @@ from __future__ import annotations
 import asyncio
 import json
 
-from .client import (ConfigError, cache_clear, gql, league, league_id, mcp,
-                     owners,
-                     players, require_writes, rest, roster_id)
-from .lookup import ambiguous, find_player
+from .client import (READ, WRITE, ConfigError, TransportFailure, cache_clear,
+                     gql, league, league_id, owners, players, require_writes,
+                     rest, roster_id, tool)
+from .lookup import display_name, resolve_names
 
 # Sleeper hands `keepers` BACK as a list and takes it IN as a String. The
 # asymmetry is undocumented and silent: pass a list to the mutation and it is
-# accepted without storing anything.
+# accepted without storing anything. (Introspection declares the argument
+# `[String]`; the JSON-array-as-String form is what was observed to persist.)
 PRE_DRAFT = "pre_draft"
+
+# settings.type: what kind of league this is. max_keepers is set on redraft
+# and guillotine leagues too, so it cannot be the test.
+LEAGUE_TYPES = {0: "redraft", 1: "keeper", 2: "dynasty", 3: "guillotine"}
+
+
+def keeper_league(settings: dict) -> tuple[bool, str]:
+    """(is it a keeper league, why not)."""
+    kind = LEAGUE_TYPES.get(settings.get("type"), f"type {settings.get('type')}")
+    cap = settings.get("max_keepers")
+    if settings.get("type") in (1, 2) and cap:
+        return True, ""
+    if cap and settings.get("type") not in (1, 2):
+        return False, (f"max_keepers is {cap} but the league type is {kind}, "
+                       f"which does not carry players over.")
+    return False, f"max_keepers is {cap!r} and the league type is {kind}."
 
 
 def parse_keepers(value) -> list[str]:
@@ -105,7 +122,7 @@ async def _kept_in_draft(lg_cfg: dict, P: dict, owner: dict) -> list[tuple]:
     return sorted(out)
 
 
-@mcp.tool()
+@tool(annotations=READ)
 async def keepers(history: bool = True, league_id_: str = "") -> str:
     """Who was kept, who is designated to be kept, and the league's rules.
 
@@ -126,16 +143,15 @@ async def keepers(history: bool = True, league_id_: str = "") -> str:
     status = str(lg_cfg.get("status") or "?")
     season = str(lg_cfg.get("season") or "?")
 
-    if not cap:
-        return (f"  {lg_cfg.get('name')} is not a keeper league — "
-                f"max_keepers is {cap!r}.")
+    ok, why = keeper_league(settings)
+    if not ok:
+        return f"  {lg_cfg.get('name')} is not a keeper league — {why}"
 
     P, rosters, owner = await asyncio.gather(
         players(), rest(f"/league/{lg}/rosters"), owners(lg))
 
     def show(ids):
-        return ", ".join((P.get(i) or {}).get("full_name", i)
-                         for i in ids) or "-"
+        return ", ".join(display_name(P.get(i), i) for i in ids) or "-"
 
     out = [f"  {lg_cfg.get('name')} — {cap} keeper(s) per team, "
            f"{season} ({status})"]
@@ -180,7 +196,7 @@ async def keepers(history: bool = True, league_id_: str = "") -> str:
     return "\n".join(out)
 
 
-@mcp.tool()
+@tool(annotations=WRITE)
 async def set_keepers(player_names: list[str], confirm: bool = False,
                       league_id_: str = "", roster_id_: int = 0) -> str:
     """WRITE. Designate which of your players you are keeping.
@@ -209,9 +225,10 @@ async def set_keepers(player_names: list[str], confirm: bool = False,
     status = str(lg_cfg.get("status") or "?")
     season = str(lg_cfg.get("season") or "?")
 
-    if not cap:
+    ok, why = keeper_league(settings)
+    if not ok:
         return (f"  Refused, nothing sent: {lg_cfg.get('name')} is not a "
-                f"keeper league (max_keepers={cap}).")
+                f"keeper league — {why}")
 
     P, rosters = await asyncio.gather(players(), rest(f"/league/{lg}/rosters"))
     me = next((r for r in (rosters or []) if r["roster_id"] == rid), None)
@@ -219,14 +236,7 @@ async def set_keepers(player_names: list[str], confirm: bool = False,
         raise ConfigError(f"No roster {rid} in league {lg}.")
     mine = {str(p) for p in (me.get("players") or [])}
 
-    chosen, bad = [], []
-    for name in player_names or []:
-        hits = [(pid, v) for pid, v in find_player(P, name) if pid in mine]
-        if len(hits) != 1:
-            bad.append(ambiguous(name, hits).strip()
-                       if hits else f"{name}: not on your roster.")
-        else:
-            chosen.append(hits[0][0])
+    chosen, bad = resolve_names(P, player_names or [], mine, "your roster")
     if bad:
         return "Refused, nothing sent:\n  " + "\n  ".join(bad)
     if len(chosen) > cap:
@@ -234,8 +244,7 @@ async def set_keepers(player_names: list[str], confirm: bool = False,
                 f"league allows {cap}.")
 
     def show(ids):
-        return ", ".join((P.get(i) or {}).get("full_name", i)
-                         for i in ids) or "(none)"
+        return ", ".join(display_name(P.get(i), i) for i in ids) or "(none)"
 
     current = parse_keepers(me.get("keepers"))
     plan = (f"  keepers now:   {show(current)}\n"
@@ -253,15 +262,30 @@ async def set_keepers(player_names: list[str], confirm: bool = False,
     cache_clear()
     # `keepers` is a String holding a JSON array. Passing a real list is
     # accepted and stores nothing.
-    await gql("mutation($lg:Snowflake!,$rid:Int!,$k:String){"
-              "roster_set_keepers(league_id:$lg,roster_id:$rid,keepers:$k)"
-              "{roster_id keepers}}",
-              {"lg": lg, "rid": rid, "k": encode_keepers(chosen)}, auth=True)
+    try:
+        d = await gql("mutation($lg:Snowflake!,$rid:Int!,$k:String){"
+                      "roster_set_keepers(league_id:$lg,roster_id:$rid,keepers:$k)"
+                      "{roster_id keepers}}",
+                      {"lg": lg, "rid": rid, "k": encode_keepers(chosen)}, auth=True)
+    except TransportFailure as e:
+        return (f"SENT? UNKNOWN — set_keepers timed out ({e.kind}) after the "
+                f"request may have been delivered. Call `keepers` before "
+                f"retrying.\n{plan}")
 
-    after = await rest(f"/league/{lg}/rosters")
-    mine_after = next((r for r in (after or []) if r["roster_id"] == rid), {})
-    now = parse_keepers(mine_after.get("keepers"))
+    # VERIFY OVER GRAPHQL, NEVER REST — REST is Cloudflare-cached and hands
+    # back the pre-write list, which then prints as "keepers are now <old>".
+    now = parse_keepers((d.get("roster_set_keepers") or {}).get("keepers"))
+    how = "mutation response"
+    try:
+        chk = await gql('{league_rosters(league_id:"%s"){roster_id keepers}}' % lg,
+                        auth=True)
+        row = next((r for r in (chk.get("league_rosters") or [])
+                    if r.get("roster_id") == rid), None)
+        if row is not None:
+            now, how = parse_keepers(row.get("keepers")), "league_rosters"
+    except Exception:                                   # noqa: BLE001
+        pass
     ok = sorted(now) == sorted(chosen)
-    return (f"{'Set' if ok else 'SENT BUT NOT CONFIRMED'} — keepers are now "
+    return (f"{'VERIFIED' if ok else 'MISMATCH'} (via {how}) — keepers are now "
             f"{show(now)}.\n{plan}" + ("" if ok else
-            "\n  The read-back does not match. Check Sleeper directly."))
+            "\n  The read-back does not match what was sent. Check Sleeper."))

@@ -7,14 +7,19 @@ WHAT THESE ADD THAT NOTHING ELSE HERE DOES. Every other tool prices players by
 projection, and projections are rebuilt from box scores — so they describe the
 week that happened. These describe the week a coach is planning: snaps and
 touches, which carry forward, and which move BEFORE the points do.
+
+POINTS ARE THE LEAGUE'S, NOT A PRESET. Every points column here is scored
+against the configured league's `scoring_settings`; only with no league
+configured does it fall back to Sleeper's half-PPR preset, and then it says so.
 """
 
 from __future__ import annotations
 
 import asyncio
 
-from .client import gql, league_id, mcp, players, rest
-from .lookup import ambiguous, find_player
+from .client import READ, gql, league, league_id, players, rest, state, tool
+from .lookup import (ambiguous, display_name,
+                     fantasy_position, find_player, positions)
 from .shares import collect, rank, trend
 
 SEASON_TYPE = "regular"
@@ -24,6 +29,23 @@ SEASON_TYPE = "regular"
 # a type error rather than a useful one. Neither fact is documented anywhere.
 CATEGORY = "stat"
 ORDER_BY = "pts_half_ppr"
+
+# The last week of the fantasy regular season. Week 18 exists in the data but
+# is when clinched teams rest starters, so a window ending there reads a
+# healthy player's rest game as a role collapse.
+LAST_FANTASY_WEEK = 17
+
+SKILL = ("QB", "RB", "WR", "TE")
+
+
+async def _scoring(league_id_: str = "") -> tuple[dict | None, str]:
+    """The league's scoring settings, and a label for the points column."""
+    from . import client
+    lg = str(league_id_ or client.DEFAULT_LEAGUE or "").strip()
+    if not lg:
+        return None, "pts (half-PPR preset — no league configured)"
+    cfg = await league(league_id(lg))
+    return cfg.get("scoring_settings") or None, "pts (league scoring)"
 
 
 async def _week(season: str, week: int) -> list[dict]:
@@ -75,19 +97,21 @@ async def _completed(season: str | None) -> tuple[str, int, str]:
     and presenting them under this season's heading would be a confident answer
     to a question nobody asked.
     """
-    from .client import state
     st = await state()
     cur_season = str(st.get("season") or "")
     cur_week = int(st.get("week") or 0)
     if season and season != cur_season:
-        # 18 is the length of the modern NFL regular season. A season that
-        # ran 17 simply returns nothing for week 18, which is harmless.
-        return season, 18, ""
+        return season, LAST_FANTASY_WEEK, ""
     return cur_season, cur_week - 1, cur_season
 
 
-@mcp.tool()
-async def usage(player_name: str, weeks: int = 5, season: str = "") -> str:
+def _pct(v) -> str:
+    return f"{v * 100:5.0f}%" if v is not None else "    -"
+
+
+@tool(annotations=READ)
+async def usage(player_name: str, weeks: int = 5, season: str = "",
+                league_id_: str = "") -> str:
     """How much work one player is actually getting, week by week.
 
     Snap share is the share of his own team's offensive plays he was on the
@@ -98,12 +122,14 @@ async def usage(player_name: str, weeks: int = 5, season: str = "") -> str:
     getting more work?" rather than "did he score?"
 
     Args:
-        player_name: Full or partial name.
+        player_name: Full or partial name, or a Sleeper player id.
         weeks: How many completed weeks to show. Default 5.
         season: Look at a past season, e.g. "2025". Defaults to the current one.
+        league_id_: League whose scoring prices the pts column. Defaults to
+            SLEEPER_LEAGUE_ID.
     """
     P = await players()
-    hits = find_player(P, player_name)
+    hits = find_player(P, player_name, allow_unsigned=True)
     if len(hits) != 1:
         return ambiguous(player_name, hits)
     pid, v = hits[0]
@@ -114,43 +140,50 @@ async def usage(player_name: str, weeks: int = 5, season: str = "") -> str:
                 f"still being played, and a week in progress is not usage.\n"
                 f"  Pass season=\"{int(szn) - 1}\" to look at last year.")
 
+    scoring, pts_label = await _scoring(league_id_)
     rows, failed = await _history(szn, through, weeks)
-    by_player = collect(rows)
+    by_player = collect(rows, scoring)
     mine = by_player.get(str(pid))
     if not mine:
-        return (f"  No {szn} usage recorded for {v.get('full_name')} "
+        return (f"  No {szn} usage recorded for {display_name(v, pid)} "
                 f"through week {through}.")
 
     t = trend(mine)
-    out = [f"  {v.get('full_name')} — {v.get('position')} {v.get('team')}"
-           f"   {szn}, {t['games']} game(s) played"]
+    first = max(1, through - weeks + 1)
+    # The team is the one he EARNED THESE SNAPS FOR, from the stat rows —
+    # the dictionary holds where he plays today.
+    team = t.get("team") or v.get("team") or "?"
+    out = [f"  {display_name(v, pid)} — {fantasy_position(v)} {team}   id={pid}"
+           f"   {szn} weeks {first}-{through}: {t['games']} game(s) played"]
     if failed:
         out.append(f"  INCOMPLETE — week(s) {failed} could not be fetched, so "
                    f"this is missing data, not missing usage.")
     out += ["",
-           f"  {'wk':>3} {'opp':>4} {'tgt':>4} {'car':>4} {'snap%':>6} "
-           f"{'tgt%':>6} {'opp%':>6} {'rz':>3} {'pts':>6}"]
+            f"  {'wk':>3} {'opp':>4} {'tgt':>4} {'car':>4} {'snap%':>6} "
+            f"{'tgt%':>6} {'opp%':>6} {'rz':>3} {'pts':>6}"]
     for w in mine:
-        def pct(v):
-            return f"{v * 100:5.0f}%" if v is not None else "    -"
         out.append(f"  {w['week']:>3} {w['opportunity']:>4.0f} "
                    f"{w['targets']:>4.0f} {w['carries']:>4.0f} "
-                   f"{pct(w['snap_share']):>6} {pct(w['target_share']):>6} "
-                   f"{pct(w['opp_share']):>6} {w['red_zone']:>3.0f} "
+                   f"{_pct(w['snap_share']):>6} {_pct(w['target_share']):>6} "
+                   f"{_pct(w['opp_share']):>6} {w['red_zone']:>3.0f} "
                    f"{w['points']:>6.1f}")
 
     if t["delta"] is None:
         out += ["", f"  Not enough weeks to show a trend — {t['games']} game(s) "
                     f"is a level, not a direction."]
     else:
-        out += ["", f"  opportunity share {t['base_opp_share'] * 100:.0f}% -> "
-                    f"{t['opp_share'] * 100:.0f}% ({t['delta'] * 100:+.0f}pp), "
-                    f"snaps {t['base_snap_share'] * 100:.0f}% -> "
-                    f"{t['snap_share'] * 100:.0f}%"]
+        out += ["", f"  opportunity share {_pct(t['base_opp_share']).strip()} -> "
+                    f"{_pct(t['opp_share']).strip()} ({t['delta'] * 100:+.0f}pp), "
+                    f"snaps {_pct(t['base_snap_share']).strip()} -> "
+                    f"{_pct(t['snap_share']).strip()}"]
+    if t["snap_games"] < t["games"]:
+        out.append(f"  {t['games'] - t['snap_games']} week(s) carry no snap data "
+                   f"and are left out of the snap averages.")
+    out.append(f"  opp = targets + carries. {pts_label}.")
     return "\n".join(out)
 
 
-@mcp.tool()
+@tool(annotations=READ)
 async def breakouts(position: str = "", weeks: int = 4, limit: int = 12,
                     min_snap_share: float = 0.25, season: str = "",
                     league_id_: str = "") -> str:
@@ -168,30 +201,38 @@ async def breakouts(position: str = "", weeks: int = 4, limit: int = 12,
         limit: How many to list. Default 12.
         min_snap_share: Ignore players below this share of their team's plays.
             Default 0.25 — under that a spike is garbage time, not a promotion.
+            A player whose rows carry no snap data cannot be filtered by it
+            and is shown with '-'.
         season: A past season, e.g. "2025". Defaults to the current one.
         league_id_: Override the configured league.
     """
     lg = league_id(league_id_ or None)
+    if position and position.upper() not in SKILL:
+        return f"position must be one of {'/'.join(SKILL)}, got {position!r}."
     szn, through, _cur = await _completed(season or None)
     if through < 1:
         return (f"  No completed weeks in {szn} yet — week {through + 1} is "
                 f"still being played.\n  Pass season=\"{int(szn) - 1}\" to see "
                 f"how roles finished last year.")
 
+    scoring, pts_label = await _scoring(lg)
     P, rosters, history = await asyncio.gather(
         players(), rest(f"/league/{lg}/rosters"),
         _history(szn, through, weeks))
     rows, failed = history
 
-    owned = {str(p) for r in (rosters or []) for p in (r.get("players") or [])}
-    owned |= {str(p) for r in (rosters or []) for p in (r.get("reserve") or [])}
-    wanted = {position.upper()} if position else {"QB", "RB", "WR", "TE"}
+    owned = set()
+    for r in (rosters or []):
+        for key in ("players", "reserve", "taxi"):
+            owned |= {str(p) for p in (r.get(key) or [])}
+    wanted = {position.upper()} if position else set(SKILL)
 
-    by_player = collect(rows)
+    by_player = collect(rows, scoring)
+    # Filtered by position only. Requiring a CURRENT team dropped every
+    # player cut or retired since a past season from that season's list; the
+    # team he played for is on the stat rows.
     trends = {pid: trend(w) for pid, w in by_player.items()
-              if pid not in owned
-              and (P.get(pid) or {}).get("position") in wanted
-              and (P.get(pid) or {}).get("team")}
+              if pid not in owned and (positions(P.get(pid)) & wanted)}
     ranked = rank(trends, min_snap_share=min_snap_share)
     if not ranked:
         return (f"  No available player is above {min_snap_share * 100:.0f}% "
@@ -211,18 +252,25 @@ async def breakouts(position: str = "", weeks: int = 4, limit: int = 12,
     out = [head] + ([note] if note else []) + [
         "", f"  {'player':22} {'pos':>3} {'tm':>3} {'snap%':>6} {'opp%':>6} "
             f"{'chg':>6} {'opp/g':>6} {'rz':>3} {'pts/g':>6}"]
+    no_snaps = 0
     for _d, _s, pid, t in ranked[:limit]:
         v = P.get(pid) or {}
         chg = f"{t['delta'] * 100:+5.0f}pp" if t["delta"] is not None else "     -"
         team = t.get("team") or v.get("team") or "?"
-        out.append(f"  {(v.get('full_name') or pid)[:22]:22} "
-                   f"{v.get('position', '?'):>3} {team:>3} "
-                   f"{t['snap_share'] * 100:5.0f}% {t['opp_share'] * 100:5.0f}% "
+        if t["snap_share"] is None:
+            no_snaps += 1
+        out.append(f"  {display_name(v, pid)[:22]:22} "
+                   f"{fantasy_position(v) or '?':>3} {team:>3} "
+                   f"{_pct(t['snap_share']):>6} {_pct(t['opp_share']):>6} "
                    f"{chg:>6} {t['opportunity']:6.1f} {t['red_zone']:>3.0f} "
                    f"{t['points']:6.1f}")
     out += ["", "  opp = targets + carries. chg = change in share of the team's "
                 "opportunities", "  against the earlier weeks in the window. "
-                "rz = red-zone looks."]
+                f"rz = red-zone looks. {pts_label}."]
+    if no_snaps:
+        out.append(f"  {no_snaps} row(s) show snap% '-': Sleeper published no "
+                   f"snap counts for those games, so the garbage-time filter "
+                   f"could not be applied to them.")
     if not position:
         out.append("  Running backs dominate an unfiltered list: carries "
                    "concentrate on one man, so their")
@@ -235,7 +283,7 @@ async def breakouts(position: str = "", weeks: int = 4, limit: int = 12,
 # the ones worth ranking by, and several are rates this module computes rather
 # than fields Sleeper returns.
 METRICS = {
-    "points": "pts_half_ppr",
+    "points": None,               # league-scored, computed
     "targets": "rec_tgt",
     "carries": "rush_att",
     "opportunity": None,          # targets + carries, computed
@@ -268,54 +316,68 @@ async def season_rows(season: str) -> list[dict]:
     return [{**r, "week": 0} for r in rows]
 
 
-@mcp.tool()
+@tool(annotations=READ)
 async def season_leaders(position: str = "", metric: str = "points",
                          per_game: bool = True, min_games: int = 4,
-                         limit: int = 15, season: str = "") -> str:
+                         limit: int = 15, season: str = "",
+                         league_id_: str = "") -> str:
     """Season-long leaders, by RATE rather than accumulation by default.
 
     Season totals are the most misleading number in fantasy: they reward
     availability as much as quality, so a player who missed five games ranks
     below a worse one who did not. Ranking per game separates those, and games
-    played is shown either way so the trade-off stays visible.
+    played is shown either way so the trade-off stays visible. Shares are per
+    game too, so a missed month does not shrink a player's role.
 
     Args:
         position: QB, RB, WR, TE. Blank means all skill positions.
         metric: points, targets, carries, opportunity, target_share, opp_share,
             snap_share, rec_yards, rush_yards, red_zone — or a raw Sleeper stat
-            key.
+            key that appears in the season rows.
         per_game: Divide counting stats by games played. Default True. Shares
             are already rates and are unaffected.
         min_games: Ignore players below this many games. Default 4 — a rate
-            over one game is not a rate.
+            over one game is not a rate. Early in a season nobody clears it;
+            the output says so and names the maximum seen.
         limit: How many to list. Default 15.
-        season: Defaults to the most recent completed season.
+        season: Defaults to the current season once a week has finished, and
+            to the previous season before then. Pass "2025" for last year.
+        league_id_: League whose scoring prices `points`. Defaults to
+            SLEEPER_LEAGUE_ID.
     """
-    from .shares import collect
-
+    if position and position.upper() not in SKILL:
+        return f"position must be one of {'/'.join(SKILL)}, got {position!r}."
     szn, through, _cur = await _completed(season or None)
     if not season and through < 1:
         szn = str(int(szn) - 1)          # nothing finished this year yet
 
+    scoring, pts_label = await _scoring(league_id_)
     P, rows = await asyncio.gather(players(), season_rows(szn))
     if not rows:
         return f"  No season stats for {szn}."
 
-    by_player = collect(rows)            # drops TEAM_ rows, keeps them as totals
+    known_keys = set()
+    for r in rows:
+        known_keys.update((r.get("stats") or {}).keys())
+    if metric not in METRICS and metric not in known_keys:
+        return (f"  Unknown metric {metric!r}. Known: {', '.join(sorted(METRICS))}"
+                f" — or any raw Sleeper stat key, e.g. rec_td, pass_yd.")
+
+    by_player = collect(rows, scoring)   # drops TEAM_ rows, keeps them as totals
     # Index once. Scanning `rows` inside the loop is quadratic over 8,000+ rows.
     raw = {str(r.get("player_id")): (r.get("stats") or {}) for r in rows}
-    wanted = ({position.upper()} if position
-              else {"QB", "RB", "WR", "TE"})
+    wanted = {position.upper()} if position else set(SKILL)
     key = METRICS.get(metric, metric)
 
-    table = []
+    table, max_gp = [], 0.0
     for pid, weeks in by_player.items():
         v = P.get(pid) or {}
-        if v.get("position") not in wanted:
+        if not (positions(v) & wanted):
             continue
         w = weeks[0]
         st = raw.get(pid, {})
         gp = float(st.get("gp") or 0)
+        max_gp = max(max_gp, gp)
         if gp < min_games:
             continue
 
@@ -325,6 +387,8 @@ async def season_leaders(position: str = "", metric: str = "points",
             value, rate = w["opportunity"], False
         elif metric == "red_zone":
             value, rate = w["red_zone"], False
+        elif metric == "points":
+            value, rate = w["points"], False
         else:
             value, rate = float(st.get(key) or 0), False
         if value is None:
@@ -333,8 +397,9 @@ async def season_leaders(position: str = "", metric: str = "points",
         table.append((shown, value, gp, pid, v, w))
 
     if not table:
-        return (f"  Nothing matched — metric {metric!r} may not exist. Known: "
-                + ", ".join(sorted(METRICS)))
+        return (f"  No {position or 'skill'} player has {min_games}+ games in "
+                f"{szn} yet (most seen: {max_gp:.0f}). Lower min_games, or pass "
+                f"season=\"{int(szn) - 1}\" for a finished season.")
     table.sort(key=lambda t: -t[0])
 
     is_share = metric.endswith("_share")
@@ -351,9 +416,10 @@ async def season_leaders(position: str = "", metric: str = "points",
     for shown, total, gp, pid, v, w in table[:limit]:
         fmt = f"{shown * 100:14.1f}%" if is_share else f"{shown:15.1f}"
         tot = "-" if is_share else f"{total:9.0f}"
-        ts = f"{w['target_share'] * 100:5.0f}%" if w["target_share"] is not None else "    -"
-        ss = f"{w['snap_share'] * 100:5.0f}%" if w["snap_share"] is not None else "    -"
-        out.append(f"  {(v.get('full_name') or pid)[:22]:22} "
-                   f"{v.get('position', '?'):>3} {w.get('team') or '?':>3} "
-                   f"{gp:4.0f} {fmt} {tot:>9} {ts:>6} {ss:>6}")
+        out.append(f"  {display_name(v, pid)[:22]:22} "
+                   f"{fantasy_position(v) or '?':>3} {w.get('team') or '?':>3} "
+                   f"{gp:4.0f} {fmt} {tot:>9} {_pct(w['target_share']):>6} "
+                   f"{_pct(w['snap_share']):>6}")
+    out.append(f"  tgt% and opp% are per game (player's rate over the team's); "
+               f"{pts_label if metric == 'points' else 'snap% counts only games he played'}.")
     return "\n".join(out)

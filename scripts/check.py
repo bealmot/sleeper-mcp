@@ -95,18 +95,37 @@ SKIP_DIRS = {".git", ".venv", "venv", "__pycache__", "node_modules", "dist",
              "build", ".tox", ".mypy_cache", ".pytest_cache"}
 
 
+def _candidate_files() -> list[pathlib.Path]:
+    """Files git would push, plus untracked ones it is not ignoring.
+
+    Scanning the whole tree made the gate fail on a scratch file git would
+    never push, which trains people to use --no-verify. Asking git also
+    covers EVERY suffix — a tracked binary (.coverage) carried 46 local paths
+    past a suffix filter for weeks.
+    """
+    r = subprocess.run(["git", "ls-files", "-z", "--cached", "--others",
+                        "--exclude-standard"], capture_output=True, cwd=ROOT)
+    if r.returncode != 0:
+        return [f for f in sorted(ROOT.rglob("*"))
+                if f.is_file() and not set(f.parts) & SKIP_DIRS]
+    return [ROOT / p for p in r.stdout.decode().split("\0") if p]
+
+
 def check_privacy() -> bool:
     hits = []
-    for f in sorted(ROOT.rglob("*")):
-        if (not f.is_file() or set(f.parts) & SKIP_DIRS
-                or f.name in PRIVACY_EXEMPT):
-            continue
-        if f.suffix not in (".py", ".md", ".toml", ".json", ".txt", ".sh", ""):
+    for f in _candidate_files():
+        if not f.is_file() or f.name in PRIVACY_EXEMPT:
             continue
         try:
-            text = f.read_text(encoding="utf-8")
-        except (UnicodeDecodeError, OSError):
+            raw = f.read_bytes()
+        except OSError:
             continue
+        # Binary files are scanned as their printable runs, like strings(1).
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            text = "\n".join(m.group(0).decode("ascii", "ignore")
+                             for m in re.finditer(rb"[\x20-\x7e]{6,}", raw))
         for pat in PRIVATE:
             for m in re.finditer(pat, text, re.IGNORECASE):
                 line = text[:m.start()].count("\n") + 1
@@ -199,14 +218,27 @@ def check_docstrings() -> bool:
             decorated = any(
                 (isinstance(d, ast.Call) and getattr(d.func, "attr", "") == "tool")
                 or getattr(d, "attr", "") == "tool"
+                or (isinstance(d, ast.Call) and getattr(d.func, "id", "") == "tool")
+                or getattr(d, "id", "") == "tool"
                 for d in node.decorator_list)
             if not decorated:
                 continue
             n += 1
-            if not ast.get_docstring(node):
+            doc = ast.get_docstring(node)
+            if not doc:
                 missing.append(f"{f.name}:{node.lineno} {node.name}")
+                continue
+            # EVERY PARAMETER MUST BE DESCRIBED. FastMCP takes names and types
+            # from the signature and the meaning from the docstring, so an
+            # undocumented parameter is one the model sees with no meaning.
+            params = [a.arg for a in node.args.args if a.arg not in ("self", "ctx")]
+            args_sec = doc.split("Args:", 1)[1] if "Args:" in doc else ""
+            undocumented = [p for p in params if f"{p}:" not in args_sec]
+            if undocumented:
+                missing.append(f"{f.name}:{node.lineno} {node.name} — Args "
+                               f"omits {', '.join(undocumented)}")
     return (fail("docstrings", missing) if missing
-            else ok(f"docstrings ({n} tools, all documented)"))
+            else ok(f"docstrings ({n} tools, every parameter described)"))
 
 
 def check_boundaries() -> bool:
@@ -342,7 +374,7 @@ def check_tests() -> bool:
 # half where every user-visible bug happened, was at 0%.
 #
 # Raise this when it rises. Never lower it to make a push go through.
-COVERAGE_FLOOR = 65
+COVERAGE_FLOOR = 80
 
 
 def check_coverage() -> bool:

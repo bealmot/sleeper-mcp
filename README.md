@@ -112,14 +112,18 @@ each league's starting slots. It needs no credentials — all of it is public.
 | `SLEEPER_ROSTER_ID` | your own roster | an integer, 1..N within the league |
 | `SLEEPER_PICKEM_LEAGUE` | pick'em only | lobby id, from the app's share link |
 | `SLEEPER_PICKEM_ROSTER` | pick'em only | your entry in that lobby |
-| `SLEEPER_TOKEN` | **writes only** | see below |
+| `SLEEPER_TOKEN` | **writes, and the reads marked NEEDS A TOKEN** | see below |
 | `SLEEPER_ENABLE_WRITES` | **writes only** | must be exactly `1` |
 
 Each of these is read from the environment first, then from the config file
 that `sleeper-mcp setup` writes (`SLEEPER_MCP_CONFIG` overrides its location).
 
-**Reads need no token at all.** Rosters, matchups, news, standings, trending
+**Most reads need no token.** Rosters, matchups, news, standings, trending
 players and transactions all work with nothing configured but a league id.
+The ones that do need one say so in their description: `chat`,
+`watched_players`, `player_history`, `transaction_search`, `traded_picks`,
+`standings_trend`, the pick'em tools, `matchup`'s projections, and `pending`'s
+view of your own waiver claims (Sleeper keeps those private).
 
 ## Writes are off by default
 
@@ -139,16 +143,21 @@ executes immediately with no veto window.
 ## Tools
 
 **Reads** — `roster` · `matchup` · `standings` · `transactions` · `pending` ·
-`player_news` · `player_outlook` · `trending` · `draft_picks` · `chat` ·
-`watched_players` · `pickem_status` · `league_info` · `find_my_leagues` · `player_history` · `keepers` · `transaction_search` · `pickem_consensus` ·
-`draft_board` · `draft_review` · `traded_picks` ·
+`player_news` · `player_outlook` · `trending` · `chat` ·
+`watched_players` · `pickem_status` · `pickem_standings` · `find_my_pools` ·
+`league_info` · `find_my_leagues` · `player_history` · `keepers` ·
+`transaction_search` · `pickem_consensus` · `draft_board` · `draft_review` ·
+`traded_picks` (and `draft_picks`, the same answer, kept for compatibility) ·
 `auth_status` · `setup_token`
 
 **Analysis** — `waiver_targets` · `bye_outlook` · `playoff_odds` · `matchup_odds` · `schedule_strength` · `playoff_bracket` · `standings_trend` · `usage` · `breakouts` · `season_leaders`
 
-**Writes** — `set_lineup` · `waiver_claim` · `cancel_claim` · `set_ir` ·
-`trade_block` · `propose_trade` · `respond_trade` · `pickem_pick` ·
+**Writes** — `set_lineup` · `waiver_claim` · `change_bid` · `cancel_claim` ·
+`set_ir` · `trade_block` · `propose_trade` · `respond_trade` · `pickem_pick` ·
 `watch_player` · `set_keepers`
+
+Every tool carries MCP annotations (`readOnlyHint` and friends), so a host can
+auto-approve the reads and prompt on the writes without reading prose.
 
 **Optional, bring your own data** — `signal_divergence` · `player_signal` ·
 `trade_targets`. Inert unless you point `SLEEPER_SIGNAL_FILE` at a JSON file of
@@ -160,17 +169,33 @@ A few worth calling out:
   not Sleeper's generic `pts_ppr`. In half-PPR, first-down-scoring or
   TE-premium leagues those differ by several points a player.
 - **`set_lineup`** reads your league's `roster_positions` at runtime, so
-  superflex, 3-WR and no-kicker leagues work without configuration.
+  superflex, 3-WR and no-kicker leagues work without configuration. It
+  refuses a player on IR, a player in a slot he cannot fill, and the same
+  player twice, and its dry run marks which slots would change. A defence
+  goes by team code, city or nickname.
+- **`pending`** is the only place your own waiver claims appear. Sleeper's
+  public feed never carries them — not as a cache artefact, at origin — so
+  this reads the authenticated transaction query, and `cancel_claim` and
+  `change_bid` take the ids it prints.
+- **`matchup`** prints the score once a week is played, actual-so-far plus
+  projection while it is being played, and the projection before.
 - **`pickem_status`** may be the only way to check a pick'em entry from a
-  desktop — pick'em has no web interface at all.
+  desktop — pick'em has no web interface at all. `find_my_pools` discovers
+  the pool and entry ids from your token, and `pickem_standings` prints the
+  pool leaderboard from Sleeper's own points, no token needed.
 - **`league_info`** surfaces the settings that silently change what everything
-  else means: waiver type, trade review days, and whether your league pays for
-  receptions or first downs.
+  else means: the format (redraft, keeper, dynasty, or guillotine — Sleeper's
+  "chopped" leagues have no standings, playoffs or trades), waiver type, trade
+  review days, and whether your league pays for receptions or first downs.
+  Reception points are read per position, so a league whose `rec` is 0 but
+  whose `bonus_rec_wr` is 0.5 is reported as the half-PPR league it is.
 - **`waiver_targets`** prices free agents by what they add to *your starting
   lineup* — `best_lineup(roster + him) − best_lineup(roster)` — not by
   projection or generic value over replacement. A high-projection player at a
   position you are already deep in correctly prices at zero. "Nothing improves
-  your lineup this week" is a real answer and it will give it.
+  your lineup this week" is a real answer and it will give it. Every free
+  agent is priced, each is marked ON WAIVERS or FREE, and your remaining FAAB
+  is shown.
 - **`season_leaders`** ranks a season **per game** by default, because season
   totals are the most misleading number in fantasy: they reward availability as
   much as quality, and a player who missed five games lands below a worse one
@@ -236,18 +261,25 @@ A few worth calling out:
   how often each team lands in a playoff seed. It **reports how much of the
   answer is evidence**: early in a season a team's strength is mostly a league
   prior rather than anything it has done, and the output says so rather than
-  printing a number that looks equally solid in week 2 and week 12. With no
-  completed games it returns a near-uniform field, which is the honest answer.
-- **`matchup_odds`** turns a projected points gap into a win probability,
-  accounting for how noisy a fantasy week is. A 15-point edge is far less
-  decisive than it sounds when weekly swings run 25 points or more.
+  printing a number that looks equally solid in week 2 and week 12 — and it
+  simulates with that uncertainty rather than merely reporting it, so early
+  odds are genuinely flatter. With no completed games it returns a
+  near-uniform field, which is the honest answer.
+- **`matchup_odds`** turns this week's projected points (when a token allows;
+  otherwise season strength) into a win probability, accounting for how noisy
+  a fantasy week is. A 15-point edge is far less decisive than it sounds when
+  weekly swings run 25 points or more.
 - **`schedule_strength`** ranks the difficulty of what each team has *left*.
   This is the part of a playoff race nobody tracks by eye, and it decides
   bubble seeds — two teams on identical records can face remaining schedules a
   touchdown apart per week.
 - **`bye_outlook`** shows which upcoming weeks you cannot field a *legal*
   lineup and which slot goes empty, so a bye-week hole surfaces in September
-  rather than on the Sunday it bites.
+  rather than on the Sunday it bites. It checks the scoreboard for which teams
+  play, so a player with no projection on a team that plays is reported
+  UNKNOWN rather than as a bye.
+- **`usage`, `breakouts`, `season_leaders` and `draft_review`** score points
+  under your league's own settings, not a preset, and say so.
 
 ## Extending it
 
@@ -272,7 +304,9 @@ Sleeper's API also serves a real-money betting business — roughly 69 of its
 ~240 queries cover wagering, account balances, payment methods, tax documents
 and CFTC-regulated event contracts.
 
-**None of them are exposed here, and the server refuses them by name.** See
+**None of them are exposed here.** The server sends only operations on an
+allow-list of the fantasy queries it uses, refuses everything else by default,
+and keeps a deny-list of money terms as a backstop. See
 [`boundaries.py`](sleeper_mcp/boundaries.py). This is a fantasy football tool:
 event contracts are financial instruments, account balances are financial data,
 and a "best parlay" feature is a gambling-advice product. If you want those,
@@ -287,7 +321,11 @@ belong with them.
   this server detects which is present, so `mcp>=1.2.0` needs no upper pin.
 - **Player names are not unique.** The dictionary holds ~11,000 entries
   including retired players — "Kenneth Walker" matches two. Tools resolve names
-  against your *roster* wherever possible for exactly this reason.
+  against your *roster* wherever possible for exactly this reason, prefer an
+  exact match over a partial one, and accept a Sleeper player id anywhere a
+  name is accepted (the ambiguity message prints the ids).
+- **Team defences have no name field.** Their id is the team code; they
+  resolve by code, city or nickname.
 - **REST responses are cached.** Never use them to confirm a write; this server
   verifies over GraphQL.
 - **League chat is untrusted input.** It is written by other people. Treat it as
@@ -307,10 +345,11 @@ python scripts/smoke.py --season 2025    # call every read tool for real
 ```
 
 Eight checks: syntax, **names** (pyflakes — a name used but never imported is
-a NameError nothing else catches), secrets, tool docstrings, the real-money
+a NameError nothing else catches), secrets, tool docstrings (every parameter
+described, because that text is what the model reads), the real-money
 boundary, pytest, **coverage** against a floor that only moves up, and a
 **privacy** scan that fails if a private league's ids, team names or local
-paths appear in a committed file. That last one exists
+paths appear in any file git would push, at any suffix. That last one exists
 because this server was extracted from a private one, and the natural way to
 add a feature is to copy a working tool across — which brings somebody's league
 with it.
@@ -325,10 +364,15 @@ not run and fails.
 unit-tested near 100% with no network. The tool layer runs against
 `tests/fake.py`, a fake Sleeper whose fixtures are shaped like real responses
 *including the parts nobody would invent*: the `TEAM_<abbr>` aggregate row that
-sits among the players, a retired duplicate with no team, a trade that lists
-each player in both adds and drops, a traded pick encoded as a
-comma-separated string. Every one of those shipped a bug because a
-hand-written fixture omitted it.
+sits among the players, a retired duplicate with no team, a defence with no
+name field, a player listed at DB but startable at WR, a pending waiver claim
+the public feed omits, a trade that lists each player in both adds and drops,
+a traded pick encoded as a comma-separated string. Every one of those shipped
+a bug because a hand-written fixture omitted it. The fake also enforces what
+Sleeper enforces silently — it refuses authenticated queries sent without a
+token, runs the real-money guard, and is stateful for mutations, so every
+write tool's send-and-verify path runs in the suite and the exact variables
+it sends are pinned.
 
 **`scripts/smoke.py` is the third layer**, and the only one that needs a real
 league — so it is not part of the gate. Its first run found `pickem_status`

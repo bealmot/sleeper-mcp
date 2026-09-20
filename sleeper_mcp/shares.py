@@ -34,6 +34,20 @@ def _num(stats: dict, key: str) -> float:
         return 0.0
 
 
+def points_under(stats: dict, scoring: dict | None) -> float:
+    """Dot a stat row against a league's own scoring settings.
+
+    `pts_half_ppr` is a preset and is wrong for any league that deviates —
+    per-position reception bonuses, first-down points, TE premium. Given the
+    league's rulebook the components are scored exactly; without one the
+    preset is the honest fallback, and callers label it as such.
+    """
+    if not scoring:
+        return _num(stats, "pts_half_ppr")
+    return sum(scoring.get(k, 0) * v for k, v in (stats or {}).items()
+               if isinstance(v, (int, float)) and not isinstance(v, bool))
+
+
 def opportunity(stats: dict) -> float:
     """Targets plus carries — the chances a coach handed this player."""
     return _num(stats, TARGETS) + _num(stats, CARRIES)
@@ -69,14 +83,16 @@ def team_totals(rows: list[dict]) -> dict[tuple[str, int], dict]:
             continue
         st = r.get("stats") or {}
         entry = {"opp": opportunity(st), "targets": _num(st, TARGETS),
-                 "carries": _num(st, CARRIES)}
+                 "carries": _num(st, CARRIES), "gp": _num(st, "gp")}
         if is_team_row(r):
             totals[(team, week)] = entry
         else:
             acc = summed.setdefault((team, week),
-                                    {"opp": 0.0, "targets": 0.0, "carries": 0.0})
-            for k in acc:
+                                    {"opp": 0.0, "targets": 0.0, "carries": 0.0,
+                                     "gp": 0.0})
+            for k in ("opp", "targets", "carries"):
                 acc[k] += entry[k]
+            acc["gp"] = max(acc["gp"], entry["gp"])
     for key, acc in summed.items():
         totals.setdefault(key, acc)
     return totals
@@ -87,13 +103,23 @@ def team_opportunity(rows: list[dict]) -> dict[tuple[str, int], float]:
     return {k: v["opp"] for k, v in team_totals(rows).items()}
 
 
-def week_usage(row: dict, totals: dict) -> dict:
-    """One player, one week: the rates, plus the raw counts behind them."""
+def week_usage(row: dict, totals: dict, scoring: dict | None = None) -> dict:
+    """One player, one week: the rates, plus the raw counts behind them.
+
+    On a SEASON row (gp > 1) the target and opportunity shares are per game —
+    the player's per-game count over the team's per-game count — so a player
+    who missed half the season shows his real role rather than half of it.
+    Snap share needs no such correction: Sleeper's tm_off_snp on a player row
+    already counts only the games he played.
+    """
     st = row.get("stats") or {}
     snaps, team_snaps = _num(st, SNAPS), _num(st, TEAM_SNAPS)
     opp, tgt = opportunity(st), _num(st, TARGETS)
     tot = totals.get((row.get("team"), row.get("week"))) or {}
     t_opp, t_tgt = tot.get("opp", 0.0), tot.get("targets", 0.0)
+    gp, t_gp = _num(st, "gp"), tot.get("gp", 0.0)
+    if gp > 1 and t_gp > 1:                     # a season row: per game
+        t_opp, t_tgt = t_opp / t_gp * gp, t_tgt / t_gp * gp
     return {
         "week": row.get("week"),
         "team": row.get("team"),
@@ -106,18 +132,20 @@ def week_usage(row: dict, totals: dict) -> dict:
         "opportunity": opp,
         "opp_share": (opp / t_opp) if t_opp > 0 else None,
         "red_zone": sum(_num(st, k) for k in RED_ZONE),
-        "points": _num(st, "pts_half_ppr"),
+        "points": points_under(st, scoring),
+        "has_snaps": team_snaps > 0,
     }
 
 
-def collect(rows: list[dict]) -> dict[str, list[dict]]:
+def collect(rows: list[dict], scoring: dict | None = None
+            ) -> dict[str, list[dict]]:
     """-> {player_id: [week_usage, ...]} sorted oldest week first."""
     totals = team_totals(rows)
     out: dict[str, list[dict]] = {}
     for r in rows:
         pid = r.get("player_id")
         if pid and not is_team_row(r):        # the aggregate is not a player
-            out.setdefault(str(pid), []).append(week_usage(r, totals))
+            out.setdefault(str(pid), []).append(week_usage(r, totals, scoring))
     for weeks in out.values():
         weeks.sort(key=lambda w: w["week"] if w["week"] is not None else -1)
     return out
@@ -138,10 +166,13 @@ def trend(weeks: list[dict], recent: int = 2) -> dict:
     """
     played = [w for w in weeks if w["snaps"] > 0 or w["opportunity"] > 0]
     tail, head = played[-recent:], played[:-recent]
+    # A week with no snap data at all cannot support a snap-share judgement;
+    # it is left out of the snap averages but still counts as played.
+    snapped = [w for w in played if w.get("has_snaps", True)]
     r_opp, b_opp = _mean([w["opp_share"] for w in tail]), \
         _mean([w["opp_share"] for w in head])
-    r_snap, b_snap = _mean([w["snap_share"] for w in tail]), \
-        _mean([w["snap_share"] for w in head])
+    r_snap, b_snap = _mean([w["snap_share"] for w in tail if w in snapped]), \
+        _mean([w["snap_share"] for w in head if w in snapped])
     return {
         # From the STAT ROW, not the player dictionary. The dictionary holds a
         # player's team TODAY, which is not where he earned a past season's
@@ -149,6 +180,7 @@ def trend(weeks: list[dict], recent: int = 2) -> dict:
         # afterwards.
         "team": played[-1]["team"] if played else None,
         "games": len(played),
+        "snap_games": len(snapped),
         "recent_games": len(tail),
         "base_games": len(head),
         "opp_share": r_opp,

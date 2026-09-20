@@ -55,7 +55,8 @@ def setup() -> int:
     print()
     print("Token: in the Sleeper web app, DevTools > Application > Local Storage")
     print("> sleeper.com > key 'token'. Paste the value WITHOUT the quotes.")
-    print("It is account-scoped and lasts about a year; reads never need it.")
+    print("It is account-scoped and lasts about a year. Most reads work without")
+    print("it; writes, and the reads marked NEEDS A TOKEN, do not.")
     print("Leave blank to stay read-only.")
     try:
         token = getpass.getpass("token: ").strip()
@@ -117,6 +118,9 @@ def setup_web(open_browser: bool = True) -> int:
     """`sleeper-mcp setup --web`: the one-time local page, from a terminal."""
     from .webauth import start
     s = start(enable_writes=False)
+    if config.source("SLEEPER_TOKEN") == "environment":
+        print("note: SLEEPER_TOKEN is set in this environment and wins over the "
+              "file after a restart.\n")
     print(f"open this in the browser where you are logged in to Sleeper:\n\n"
           f"    {s.url}\n\nsingle use, expires in 5 minutes. Waiting ...")
     if open_browser:

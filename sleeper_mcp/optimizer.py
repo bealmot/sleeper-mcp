@@ -40,9 +40,27 @@ SLOT_ELIGIBILITY: dict[str, set[str]] = {
 }
 
 
-def eligible(slot: str, position: str | None) -> bool:
-    """May a player at `position` fill `slot`?"""
-    return position in SLOT_ELIGIBILITY.get(slot, {slot})
+def eligible(slot: str, position) -> bool:
+    """May a player fill `slot`?
+
+    `position` is a single position or a set of them — Sleeper's
+    `fantasy_positions`, which is where a lineup may START a player and which
+    differs from `position` for two-way players (DB listed, WR eligible) and
+    fullbacks (FB listed, RB eligible). Judging on the single listed position
+    made every such player unassignable.
+    """
+    allowed = SLOT_ELIGIBILITY.get(slot, {slot})
+    if isinstance(position, (set, frozenset, list, tuple)):
+        return any(p in allowed for p in position)
+    return position in allowed
+
+
+def _positions(p: dict) -> set:
+    """The positions a pool entry may fill: `positions` if given, else `pos`."""
+    ps = p.get("positions")
+    if ps:
+        return set(ps)
+    return {p.get("pos")} if p.get("pos") else set()
 
 
 def best_lineup(pool: list[dict], slots: list[str]) -> tuple[float, list]:
@@ -94,24 +112,36 @@ def best_lineup(pool: list[dict], slots: list[str]) -> tuple[float, list]:
         return _greedy(live, slots)
 
     full = 1 << len(slots)
-    # best[mask] = (points, assignment) using exactly the slots in `mask`
-    best_of: list = [(0.0, None)] * full
+    # best[mask] = (points, assignment) using exactly the slots in `mask`, or
+    # None while no combination of players reaches that mask.
+    #
+    # UNREACHED IS None, NOT ZERO POINTS. It used to be (0.0, None) with a
+    # strict `>` test, so a player projecting 0.0 — or a defence projecting
+    # negative, which this league's pts_allow scoring makes routine — could
+    # never extend any mask, and the slot he was the only man for came back
+    # as "cannot be filled". Legality is a question of eligibility, not points.
+    best_of: list = [None] * full
     best_of[0] = (0.0, ())
     for p in live:
         pts = p["pts"]
+        ps = _positions(p)
         for mask in range(full - 1, -1, -1):
             cur = best_of[mask]
-            if cur[1] is None:
+            if cur is None:
                 continue
             for i, slot in enumerate(slots):
                 bit = 1 << i
-                if mask & bit or not eligible(slot, p.get("pos")):
+                if mask & bit or not eligible(slot, ps):
                     continue
                 cand = (cur[0] + pts, cur[1] + ((i, p),))
-                if cand[0] > best_of[mask | bit][0]:
+                prev = best_of[mask | bit]
+                if prev is None or cand[0] > prev[0]:
                     best_of[mask | bit] = cand
 
-    top = max(best_of, key=lambda x: x[0])
+    # FILL THE MOST SLOTS FIRST, then score. A lineup with a slot empty is
+    # not legal, so it never beats one that fills the slot at a loss.
+    top = max(((m, s) for m, s in enumerate(best_of) if s is not None),
+              key=lambda ms: (bin(ms[0]).count("1"), ms[1][0]))[1]
     assign: list = [None] * len(slots)
     for i, p in (top[1] or ()):
         assign[i] = p
@@ -137,14 +167,20 @@ def _prune(live: list[dict], slots: list[str]) -> list[dict]:
     for slot in slots:
         for pos in SLOT_ELIGIBILITY.get(slot, {slot}):
             capacity[pos] = capacity.get(pos, 0) + 1
+    # A player eligible at several positions is kept if he is top-K at ANY of
+    # them; a set keeps him from being counted twice.
     by_pos: dict = {}
     for p in live:
-        by_pos.setdefault(p.get("pos"), []).append(p)
+        for pos in _positions(p):
+            by_pos.setdefault(pos, []).append(p)
+    kept_ids: set = set()
     kept = []
     for pos, group in by_pos.items():
         k = capacity.get(pos, 0)
-        if k:
-            kept.extend(sorted(group, key=lambda x: -x["pts"])[:k])
+        for p in sorted(group, key=lambda x: -x["pts"])[:k]:
+            if id(p) not in kept_ids:
+                kept_ids.add(id(p))
+                kept.append(p)
     return kept
 
 
@@ -162,7 +198,7 @@ def _greedy(live: list[dict], slots: list[str]) -> tuple[float, list]:
     assign: list = [None] * len(slots)
     for i in order:
         cands = [(j, p) for j, p in enumerate(live)
-                 if j not in taken and eligible(slots[i], p.get("pos"))]
+                 if j not in taken and eligible(slots[i], _positions(p))]
         if not cands:
             continue
         j, pick = max(cands, key=lambda jp: jp[1]["pts"])

@@ -85,6 +85,94 @@ submit_waiver_claim(league_id: Snowflake!,
 `k_adds` holds player ids, `v_adds` the roster receiving each, and
 `k_settings`/`v_settings` carry `["waiver_bid"]` / `[amount]`.
 
+### A pending waiver claim is invisible to REST — at origin, not in cache
+
+`/league/{id}/transactions/{week}` never carries a manager's own queued
+waiver claim. A cache-busted fetch (`cf-cache-status: MISS`) still returns
+none while `league_transactions_filtered(status_filters:["pending"])` returns
+it, with `transaction_id`, `settings.waiver_bid`, `creator` and
+`consenter_ids`. So a "pending" view needs the authenticated query, and
+`cancel_waiver_claim` / `update_waiver_claim` cannot be fed from REST.
+
+The bid is `settings.waiver_bid`. `waiver_budget` on a transaction is the list
+of FAAB transfers inside a trade (`{sender, receiver, amount}` objects from
+REST, `"sender,receiver,amount"` strings from GraphQL), and is null on a claim.
+
+### The trade block and the waiver clock live in `league_players`
+
+The REST roster has no trade-block field (`player_trade_block` and
+`metadata.trade_block` do not exist). The PUBLIC `league_players(league_id)`
+query returns one row per player the league has touched, and `settings`
+carries:
+
+| key | meaning |
+|---|---|
+| `otb` | the roster id that listed him on the trade block |
+| `otb_added_at` | when, epoch **milliseconds** |
+| `waiver_clears_at` | when he comes off waivers, epoch **SECONDS** |
+| `last_added` | when he was last picked up, epoch seconds |
+
+`add_league_player_trade_block` / `remove_league_player_trade_block` return a
+`LeaguePlayer`, whose only fields are `metadata settings player_id league_id`
+— selecting `roster_id` is a validation error before anything executes.
+
+### Proposing a trade: the wire shape
+
+`propose_trade(k_adds, v_adds, k_drops, v_drops, waiver_budget, draft_picks,
+expires_at, reject_transaction_id)`. Every completed trade Sleeper records
+lists every player in BOTH maps — `adds` keyed by the roster receiving him,
+`drops` by the roster that held him — and a FAAB transfer as a
+`"sender,receiver,amount"` string. This server sends the mutation in that
+shape. It was derived from transaction records (REST and GraphQL agree) rather
+than captured from the app's own request, so the first live proposal from the
+tool is worth watching in `pending`.
+
+### Roster ids are SLOTS, and owners change between seasons
+
+`league_transactions_by_player` spans seasons, and each row's `roster_ids`
+are slot numbers in the league the row belongs to (the row carries
+`league_id`). Roster 7 was one manager in 2025 and another in 2026. Resolving
+every row through the current league's owner table names the wrong manager;
+resolve through the owner table of `row.league_id`.
+
+### `matchup_legs` carries the score too
+
+`MatchupLeg` has `points` (actual, null until played), `proj_points`,
+`max_points` (Sleeper's own best-possible lineup for a finished week) and
+`starters`. `matchup_legs_related_to_roster(league_id, roster_id,
+start_round, end_round)` gives one roster's legs across weeks in one call
+(authenticated). REST `/league/{id}/matchups/{week}` carries `points`,
+`starters_points` and `players_points` unauthenticated.
+
+### `league_rosters(league_id)` is the GraphQL roster read
+
+Same fields as REST (`players`, `starters`, `reserve`, `taxi`, `keepers`,
+`settings`) without the Cloudflare cache, so it is the read to verify a
+`roster_update_reserve` or `roster_set_keepers` write with. The mutations'
+own responses (`{roster_id reserve}`, `{roster_id keepers}`) are the
+primary read-back either way.
+
+### `messages` pages with `before`
+
+`messages(parent_id!, before: Snowflake, order_by: String, show_hidden)`
+returns 50 rows. `before` takes a message id and returns the older page;
+`order_by` accepts only `"asc"` or `"desc"` (anything else is the HTTP 500
+above). A message with no `text` may carry an `attachment` (a gif, an image).
+
+### `settings.type` is the league format
+
+0 redraft, 1 keeper, 2 dynasty, 3 guillotine (Sleeper's "chopped" leagues:
+the lowest weekly score is eliminated, `playoff_week_start` is 0,
+`disable_trades` is 1, and the roster of a chopped team is emptied).
+`max_keepers` is set on redraft and guillotine leagues too, so it is not the
+test for a keeper league. A clone of a league carries
+`metadata.cloned_from`; the source carries `metadata.latest_cloned_to`.
+
+`settings.last_scored_leg` is the last week Sleeper has written into the
+record and `settings.leg` the current one — the league's own clock, which is
+what decides "finished" for a league whose season is not the NFL's current
+one.
+
 ### Player names are not unique
 
 The dictionary holds ~11,000 entries **including retired players**. "Kenneth
@@ -183,7 +271,19 @@ anything but complete as undecided: a game in progress has a leader and not a
 winner.
 
 **`leg_id` is `"v1:regular:<week>"`**, not a snowflake. Get the list from
-`get_pickem_legs(league_id, roster_id)`; both arguments are required.
+`get_pickem_legs(league_id, roster_id)`; both arguments are required, and it
+returns EVERY week's leg, not the current one — pick by `leg_id`. Each leg
+also carries `leg_scoring_result`, `{game_id: 1.0|0.0}` written by Sleeper as
+each game finishes, which is the authoritative correct/incorrect for that
+entry.
+
+**The pool is discoverable without a share link.** `my_leagues` (authenticated,
+no arguments needed) lists it with `sport: "pickem:nfl"` and
+`roster_positions: null`; the public `rosters_by_user(user_id, sport:
+"pickem:nfl", season_type: "regular", season)` returns the caller's entry
+(`roster_id`) in it. Public REST `/league/<pool>/rosters` returns every entry
+with `metadata.points_by_leg`, a JSON STRING of `{leg_id: points}` — Sleeper's
+own scoring, the number the app shows.
 
 **`get_pickem_picks_for_league(league_id, leg_id, include_tiebreaker)`** returns
 a Map keyed by roster id as a STRING, each value `{picks, tiebreaker}` where
@@ -265,9 +365,11 @@ carry entries in it mid-season, so it is plainly not inert outside the
 pre-draft window — but nothing observed here establishes how it is consumed at
 the next draft. Do not assert a mechanism for it.
 
-`roster_set_keepers(keepers: String, ...)` takes a JSON ARRAY AS A STRING —
-`"[\"11584\"]"` — while the roster hands it back as a real list. Passing a
-list to the mutation is accepted and stores nothing.
+`roster_set_keepers(keepers: ...)` was observed to persist a JSON ARRAY AS A
+STRING — `"[\"11584\"]"` — while the roster hands it back as a real list, and
+passing a bare list was observed to store nothing. Introspection declares the
+argument `[String]`, so the server is coercing; the string form is what has
+been seen to work.
 
 ## `league_transactions_by_player`
 
@@ -366,6 +468,13 @@ This server exposes none of them and refuses them by name — see
 `sleeper_mcp/boundaries.py`. If you fork this, please keep that boundary:
 event contracts are financial instruments, and a fantasy tool has no business
 reaching into someone's balances or payment methods.
+
+## Trending, with a limit
+
+`/v1/players/nfl/trending/{add|drop}?lookback_hours=24&limit=N` (public)
+honours `limit` and returns `count` per player — how many leagues moved on
+him. The GraphQL `trending_players(sport, sort)` takes no limit and returns
+25.
 
 ## Useful endpoints for onboarding
 
