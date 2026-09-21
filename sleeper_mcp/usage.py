@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 
 from .client import READ, gql, league, league_id, players, rest, state, tool
-from .lookup import (ambiguous, display_name,
+from .lookup import (FANTASY_POSITIONS, ambiguous, display_name,
                      fantasy_position, find_player, positions)
 from .shares import collect, rank, trend
 
@@ -330,7 +330,8 @@ async def season_leaders(position: str = "", metric: str = "points",
     game too, so a missed month does not shrink a player's role.
 
     Args:
-        position: QB, RB, WR, TE. Blank means all skill positions.
+        position: QB, RB, WR, TE, K or DEF. Blank means the skill positions.
+            Kickers and defences matter in leagues that score them heavily.
         metric: points, targets, carries, opportunity, target_share, opp_share,
             snap_share, rec_yards, rush_yards, red_zone — or a raw Sleeper stat
             key that appears in the season rows.
@@ -345,8 +346,9 @@ async def season_leaders(position: str = "", metric: str = "points",
         league_id_: League whose scoring prices `points`. Defaults to
             SLEEPER_LEAGUE_ID.
     """
-    if position and position.upper() not in SKILL:
-        return f"position must be one of {'/'.join(SKILL)}, got {position!r}."
+    if position and position.upper() not in FANTASY_POSITIONS:
+        return (f"position must be one of {'/'.join(FANTASY_POSITIONS)}, "
+                f"got {position!r}.")
     szn, through, _cur = await _completed(season or None)
     if not season and through < 1:
         szn = str(int(szn) - 1)          # nothing finished this year yet

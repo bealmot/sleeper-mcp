@@ -76,3 +76,13 @@ async def test_a_past_season_window_ends_at_week_17(sleeper):
     from sleeper_mcp.usage import usage
     out = await call(usage, player_name="Doe Catcher", season="2025", weeks=3)
     assert "weeks 15-17" in out
+
+
+async def test_season_leaders_can_rank_defences_and_kickers(sleeper, monkeypatch):
+    """Leagues that score K/DEF like starters need them on the board."""
+    from sleeper_mcp.usage import season_leaders
+    monkeypatch.setitem(fake.STATS, "AAA", {"sack": 6.0, "pts_half_ppr": 20.0, "gp": 4.0})
+    monkeypatch.setitem(fake._TEAM_OF, "AAA", "AAA")
+    out = await call(season_leaders, position="DEF", min_games=1)
+    assert "Aard Varks" in out and "DEF leaders" in out
+    assert "position must be one of" in await call(season_leaders, position="FLEX")
