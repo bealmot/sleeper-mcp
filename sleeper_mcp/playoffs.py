@@ -12,7 +12,8 @@ import asyncio
 
 from .client import (current_week, gql, league, league_id, mcp, owners,
                      rest)
-from .season import (bracket_champion, bracket_rounds, ordinal,
+from .season import (bracket_champion, bracket_rounds,
+                     confidence as _confidence, ordinal,
                      simulate, split_games, team_strength,
                      win_probability)
 
@@ -65,26 +66,6 @@ async def _season(lg: str):
         scores.setdefault(r["roster_id"], [])
 
     return scores, remaining, records, playoff_teams, await owners(lg), wk
-
-
-def _confidence(strength: dict) -> tuple[float, int, str]:
-    """How much of this forecast is evidence, and a plain warning if little."""
-    evs = [v[3] for v in strength.values()]
-    games = max((v[2] for v in strength.values()), default=0)
-    ev = sum(evs) / len(evs) if evs else 0.0
-    if games == 0:
-        note = ("NO COMPLETED GAMES. Every team sits at the league prior, so "
-                "these odds are schedule and nothing else.")
-    elif ev < 0.35:
-        note = (f"LOW CONFIDENCE — {games} game(s) played, so roughly "
-                f"{(1 - ev) * 100:.0f}% of each strength estimate is still the "
-                f"league prior. Read the ORDER, not the numbers.")
-    elif ev < 0.6:
-        note = (f"MODERATE — {games} games played, about {ev * 100:.0f}% "
-                f"evidence. Gaps under ~10 points are not yet real.")
-    else:
-        note = f"{games} games played — estimates are mostly evidence now."
-    return ev, games, note
 
 
 @mcp.tool()

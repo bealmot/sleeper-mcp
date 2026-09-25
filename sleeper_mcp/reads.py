@@ -8,6 +8,7 @@ from .client import (AuthError, ConfigError, current_week, gql, league,
                      league_id, mcp, owners, players, rest, roster_id,
                      scored, state)
 from .lookup import ambiguous, find_player
+from .season import confidence, team_strength
 
 
 @mcp.tool()
@@ -126,7 +127,13 @@ async def matchup(league_id_: str = "", week: int = 0) -> str:
 
 @mcp.tool()
 async def standings(league_id_: str = "") -> str:
-    """League standings with points for and against."""
+    """League standings with points for, against, and a shrunk per-week rate.
+
+    `avg` is raw points per game. `true` is that average pulled toward the
+    league mean by how few games back it — early in a season most of a team's
+    apparent quality is noise, and the raw column invites reading a hot start
+    as a good team. The footer says what fraction is actually evidence.
+    """
     lg = league_id(league_id_ or None)
     owner = await owners(lg)
     rosters = await rest(f"/league/{lg}/rosters") or []
@@ -137,11 +144,41 @@ async def standings(league_id_: str = "") -> str:
         pa = float(s.get("fpts_against", 0)) + \
             float(s.get("fpts_against_decimal", 0)) / 100
         rows.append((s.get("wins", 0), pf, owner.get(r["roster_id"], "?"),
-                     s.get("losses", 0), s.get("ties", 0), pa))
+                     s.get("losses", 0), s.get("ties", 0), pa,
+                     r["roster_id"]))
     rows.sort(key=lambda x: (-x[0], -x[1]))
-    out = [f"  {'team':22} {'W-L-T':9} {'PF':>8} {'PA':>8}"]
-    for w, pf, name, l, t, pa in rows:
-        out.append(f"  {name[:22]:22} {f'{w}-{l}-{t}':9} {pf:8.1f} {pa:8.1f}")
+
+    # Rebuild per-week scores so the shrink has an n to work with. The roster
+    # settings carry season TOTALS only, and totals divided by games is the
+    # raw average this column exists to qualify.
+    #
+    # ONLY strength[rid][0] (mu) IS MEANINGFUL HERE. Shrinking needs the
+    # observed mean, the game count and the league mean, all of which survive
+    # this rebuild. The per-week VARIANCE does not — every week is the same
+    # synthetic value, so league_scoring sees zero within-team deviation and
+    # falls back to PRIOR_SD. Do not read sd from this strength dict; fetch the
+    # real weekly matchups (as playoffs.py does) if a caller ever needs it.
+    played = {}
+    for w, pf, _n, l, t, _pa, rid in rows:
+        played[rid] = int(w) + int(l) + int(t)
+    n_games = max(played.values(), default=0)
+    scores = {rid: [pf / played[rid]] * played[rid] if played[rid] else []
+              for w, pf, _n, l, t, _pa, rid in rows}
+    strength = team_strength(scores)
+    ev, games, note = confidence(strength)
+
+    out = [f"  {'team':22} {'W-L-T':9} {'PF':>8} {'PA':>8} "
+           f"{'avg':>7} {'true':>7}"]
+    for w, pf, name, l, t, pa, rid in rows:
+        g = played[rid]
+        avg = pf / g if g else 0.0
+        mu = strength[rid][0]
+        out.append(f"  {name[:22]:22} {f'{w}-{l}-{t}':9} {pf:8.1f} {pa:8.1f} "
+                   f"{avg:7.1f} {mu:7.1f}")
+    if n_games:
+        out += ["", f"  {note}",
+                f"  true = avg shrunk toward the league mean "
+                f"({ev * 100:.0f}% evidence after {games} game(s))."]
     return "\n".join(out)
 
 

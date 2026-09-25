@@ -120,6 +120,34 @@ def team_strength(scores: dict[int, list[float]],
     return out
 
 
+def confidence(strength: dict) -> tuple[float, int, str]:
+    """How much of an estimate is evidence, and a plain warning when little.
+
+    Pure, and shared: every surface that reports a shrunk figure must say how
+    much of it is observation, in the SAME words. It previously lived in
+    playoffs.py, so the playoff tools carried the warning and the standings
+    table — the thing people actually read — showed raw season totals with no
+    per-game figure at all. That is why "two thirds of this is still the prior"
+    never reached the reader.
+    """
+    evs = [v[3] for v in strength.values()]
+    games = max((v[2] for v in strength.values()), default=0)
+    ev = sum(evs) / len(evs) if evs else 0.0
+    if games == 0:
+        note = ("NO COMPLETED GAMES. Every team sits at the league prior, so "
+                "these odds are schedule and nothing else.")
+    elif ev < 0.35:
+        note = (f"LOW CONFIDENCE — {games} game(s) played, so roughly "
+                f"{(1 - ev) * 100:.0f}% of each strength estimate is still the "
+                f"league prior. Read the ORDER, not the numbers.")
+    elif ev < 0.6:
+        note = (f"MODERATE — {games} games played, about {ev * 100:.0f}% "
+                f"evidence. Gaps under ~10 points are not yet real.")
+    else:
+        note = f"{games} games played — estimates are mostly evidence now."
+    return ev, games, note
+
+
 def win_probability(mu_a: float, sd_a: float, mu_b: float, sd_b: float) -> float:
     """P(A outscores B), treating both scores as independent normals.
 
