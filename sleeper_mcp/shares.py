@@ -26,6 +26,12 @@ SNAPS = "off_snp"
 TEAM_SNAPS = "tm_off_snp"
 RED_ZONE = ("rec_rz_tgt", "rush_rz_att")
 
+# How far a snap share must move between the baseline and the recent games
+# before the change is called a role change rather than game-script noise.
+# Twenty points is deliberately coarse: a starter dropping from 70% to 50% is
+# still a starter, while 85% to 36% is a different job.
+SHIFT = 0.20
+
 
 def _num(stats: dict, key: str) -> float:
     try:
@@ -110,8 +116,29 @@ def week_usage(row: dict, totals: dict) -> dict:
     }
 
 
+def latest(weeks: list[dict] | None) -> dict | None:
+    """The NEWEST week for a player, or None when there are no weeks.
+
+    collect() sorts oldest week first, so `weeks[0]` is the STALE one. That
+    index reads like "the player's usage" and silently returns his oldest
+    measurement the moment a caller pulls more than one week — a trap that
+    survived a real decision: a running back was recommended on 85% snap share
+    eleven days after the week that produced it, by which time he had lost the
+    job and was at 36%.
+
+    Reach for this instead of an index. It returns the newest row as recorded,
+    including a week the player missed, because "he did not play last week" is
+    usage information rather than an absence of it.
+    """
+    return weeks[-1] if weeks else None
+
+
 def collect(rows: list[dict]) -> dict[str, list[dict]]:
-    """-> {player_id: [week_usage, ...]} sorted oldest week first."""
+    """-> {player_id: [week_usage, ...]} sorted oldest week first.
+
+    Oldest first because the order IS the signal — see trend(). Use latest()
+    rather than an index when you want the current week.
+    """
     totals = team_totals(rows)
     out: dict[str, list[dict]] = {}
     for r in rows:
@@ -135,6 +162,12 @@ def trend(weeks: list[dict], recent: int = 2) -> dict:
     no baseline to compare against, which is the ordinary state of the first
     few weeks of a season — NOT zero. Zero would claim a player's role is
     unchanged when nothing is known about what it was.
+
+    `shift` names the snap-share move: "collapsed", "surged", "steady", or
+    None when there is no baseline. It exists because the numbers alone were
+    not enough — this function computed a -22% delta for a back who had lost
+    his job and nothing read it, so the stale 85% from two weeks earlier went
+    into a recommendation instead.
     """
     played = [w for w in weeks if w["snaps"] > 0 or w["opportunity"] > 0]
     tail, head = played[-recent:], played[:-recent]
@@ -142,6 +175,8 @@ def trend(weeks: list[dict], recent: int = 2) -> dict:
         _mean([w["opp_share"] for w in head])
     r_snap, b_snap = _mean([w["snap_share"] for w in tail]), \
         _mean([w["snap_share"] for w in head])
+    snap_delta = ((r_snap - b_snap)
+                  if (r_snap is not None and b_snap is not None) else None)
     return {
         # From the STAT ROW, not the player dictionary. The dictionary holds a
         # player's team TODAY, which is not where he earned a past season's
@@ -157,8 +192,14 @@ def trend(weeks: list[dict], recent: int = 2) -> dict:
         else None,
         "snap_share": r_snap,
         "base_snap_share": b_snap,
-        "snap_delta": (r_snap - b_snap)
-        if (r_snap is not None and b_snap is not None) else None,
+        "snap_delta": snap_delta,
+        # A word for the delta, so a caller cannot read the number and forget
+        # to act on it. None means there is no baseline to judge against —
+        # never "steady", which would claim a role is unchanged when nothing
+        # is known about what it was.
+        "shift": ("collapsed" if snap_delta <= -SHIFT
+                  else "surged" if snap_delta >= SHIFT else "steady")
+        if snap_delta is not None else None,
         "target_share": _mean([w["target_share"] for w in tail]),
         "opportunity": _mean([w["opportunity"] for w in tail]) or 0.0,
         "red_zone": sum(w["red_zone"] for w in tail),

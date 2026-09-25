@@ -4,9 +4,9 @@ Shares are ratios, and ratios fail quietly — a wrong denominator gives a
 plausible number, never an exception. Most of these check the denominator.
 """
 
-from sleeper_mcp.shares import (collect, is_team_row, opportunity, rank,
-                                team_opportunity, team_totals, trend,
-                                week_usage)
+from sleeper_mcp.shares import (SHIFT, collect, is_team_row, latest,
+                                opportunity, rank, team_opportunity,
+                                team_totals, trend, week_usage)
 
 
 def row(pid, team, week, **stats):
@@ -210,3 +210,62 @@ def test_stamped_season_rows_give_correct_full_season_shares():
     assert abs(u["target_share"] - 166 / 581) < 1e-9        # 28.6%
     assert abs(u["opp_share"] - 166 / 1046) < 1e-9
     assert abs(u["snap_share"] - 675 / 990) < 1e-9
+
+
+# --- latest() and the shift flag -------------------------------------------
+#
+# Both exist because of one real miss: a back recommended on 85% snap share
+# eleven days after the week that produced it, by which time he was at 36%.
+# collect() sorts oldest-first, so the obvious index returned the stale week.
+
+def _wk(week, snap_share, team="NE"):
+    """A usage row with the fields trend() and latest() actually read."""
+    return {"week": week, "team": team, "opponent": "BUF",
+            "snaps": snap_share * 100, "snap_share": snap_share,
+            "targets": 2.0, "target_share": 0.1, "carries": 10.0,
+            "opportunity": 12.0, "opp_share": snap_share,
+            "red_zone": 1.0, "points": 10.0}
+
+
+def test_latest_returns_the_newest_week_not_the_first():
+    weeks = [_wk(1, 0.85), _wk(2, 0.36)]
+    assert latest(weeks)["week"] == 2
+    assert latest(weeks)["snap_share"] == 0.36
+    # the trap this replaces
+    assert weeks[0]["snap_share"] == 0.85
+
+
+def test_latest_of_nothing_is_none_not_a_crash():
+    assert latest([]) is None
+    assert latest(None) is None
+
+
+def test_latest_keeps_a_week_the_player_missed():
+    # "he did not play last week" is usage information, not its absence
+    weeks = [_wk(1, 0.85), _wk(2, 0.0)]
+    assert latest(weeks)["snap_share"] == 0.0
+
+
+def test_a_lost_job_is_flagged_collapsed():
+    # the real case: 85% then 36%
+    t = trend([_wk(1, 0.85), _wk(2, 0.36)], recent=1)
+    assert t["shift"] == "collapsed"
+    assert t["snap_delta"] < -SHIFT
+
+
+def test_a_won_job_is_flagged_surged():
+    t = trend([_wk(1, 0.20), _wk(2, 0.60)], recent=1)
+    assert t["shift"] == "surged"
+
+
+def test_an_ordinary_week_to_week_wobble_is_steady():
+    # 70% to 60% is still the same job, and must not cry wolf
+    t = trend([_wk(1, 0.70), _wk(2, 0.60)], recent=1)
+    assert t["shift"] == "steady"
+
+
+def test_no_baseline_gives_no_shift_rather_than_steady():
+    # week 1 of a season knows nothing about the role; "steady" would claim it
+    t = trend([_wk(1, 0.85)], recent=1)
+    assert t["snap_delta"] is None
+    assert t["shift"] is None
