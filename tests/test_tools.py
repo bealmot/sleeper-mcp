@@ -220,9 +220,18 @@ async def test_empty_pickem_entries_are_not_counted_as_pickers(sleeper):
     assert "2 of 3 entries submitted" in out
 
 
+@pytest.mark.asyncio
+async def test_pickem_status_shows_this_weeks_tiebreaker(sleeper):
+    """The tiebreaker is a Map, and the legs list starts with LAST week's."""
+    from sleeper_mcp.reads import pickem_status
+    out = await call(pickem_status)
+    assert "tiebreaker: total_points = 40 on game g2" in out
+
+
 # --- writes -----------------------------------------------------------------
 # The riskiest module in the package and the least exercised. Running these
-# against the fake is safe by construction — it has nothing to mutate — so the
+# against the fake is safe by construction — the only thing it can mutate is
+# its own pick'em tiebreaker, kept so one write can be read back — so the
 # only reason writes.py sat at 10% was that nobody had written these.
 #
 # Every one asserts a REFUSAL. That is the behaviour worth pinning: a write
@@ -344,3 +353,70 @@ async def test_the_chalk_comparison_is_reported(sleeper):
     from sleeper_mcp.reads import pickem_consensus
     out = await call(pickem_consensus)
     assert "taking the pool favourite" in out
+
+
+# --- pick'em tiebreaker ------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_pickem_tiebreaker_dry_run_shows_this_weeks_value(sleeper):
+    """Week 4's leg comes first in the response; reading it would say 33."""
+    from sleeper_mcp.writes import pickem_tiebreaker
+    out = await call(pickem_tiebreaker, total_points=47)
+    assert "DRY RUN" in out
+    assert "47 total points on game g2 (was 40 on game g2)" in out
+    assert sleeper.TIEBREAKER["value"] == 40
+
+
+@pytest.mark.asyncio
+async def test_pickem_tiebreaker_refuses_while_writes_are_off(sleeper):
+    from sleeper_mcp.client import WritesDisabled
+    from sleeper_mcp.writes import pickem_tiebreaker
+    with pytest.raises(WritesDisabled):
+        await call(pickem_tiebreaker, total_points=47, confirm=True)
+    assert sleeper.TIEBREAKER["value"] == 40
+
+
+@pytest.mark.asyncio
+async def test_pickem_tiebreaker_sets_and_reads_back(sleeper, monkeypatch):
+    from sleeper_mcp import client
+    from sleeper_mcp.writes import pickem_tiebreaker
+    monkeypatch.setattr(client, "WRITES_ENABLED", True)
+    out = await call(pickem_tiebreaker, total_points=47, confirm=True)
+    assert out.startswith("VERIFIED")
+    assert sleeper.TIEBREAKER == {"type": "total_points", "value": 47,
+                                  "game_id": "g2",
+                                  "updated_at": 1757272300000}
+
+
+@pytest.mark.asyncio
+async def test_pickem_tiebreaker_can_move_to_another_game(sleeper, monkeypatch):
+    from sleeper_mcp import client
+    from sleeper_mcp.writes import pickem_tiebreaker
+    monkeypatch.setattr(client, "WRITES_ENABLED", True)
+    out = await call(pickem_tiebreaker, total_points=51, game_id="g1",
+                     confirm=True)
+    assert "VERIFIED" in out and sleeper.TIEBREAKER["game_id"] == "g1"
+
+
+@pytest.mark.asyncio
+async def test_pickem_tiebreaker_refuses_an_impossible_total(sleeper):
+    from sleeper_mcp.writes import pickem_tiebreaker
+    out = await call(pickem_tiebreaker, total_points=-3)
+    assert "Refused" in out and "nothing sent" in out
+
+
+@pytest.mark.asyncio
+async def test_pickem_tiebreaker_needs_a_game_when_the_entry_has_none(sleeper):
+    """Guessing the pool's tiebreaker game would set a number on the wrong
+    game; refuse and say where the ids are."""
+    from sleeper_mcp.writes import pickem_tiebreaker
+    sleeper.TIEBREAKER.clear()
+    out = await call(pickem_tiebreaker, total_points=47)
+    assert "Refused" in out and "game_id" in out
+
+
+@pytest.mark.asyncio
+async def test_pickem_tiebreaker_refuses_a_week_with_no_leg(sleeper):
+    from sleeper_mcp.writes import pickem_tiebreaker
+    out = await call(pickem_tiebreaker, total_points=47, week=9)
+    assert "Refused" in out and "week 9" in out

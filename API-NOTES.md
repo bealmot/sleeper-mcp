@@ -183,7 +183,21 @@ anything but complete as undecided: a game in progress has a leader and not a
 winner.
 
 **`leg_id` is `"v1:regular:<week>"`**, not a snowflake. Get the list from
-`get_pickem_legs(league_id, roster_id)`; both arguments are required.
+`get_pickem_legs(league_id, roster_id)`; both arguments are required, and it
+returns EVERY week's leg, earliest first — select by `leg_id`, because the
+first leg is not the current week.
+
+**The tiebreaker is a Map, not a number:** `{type: "total_points", value,
+game_id, updated_at}` on each leg. It is set by `set_pickem_tiebreaker(league_id,
+roster_id, leg_id, tiebreaker: InputPickemTiebreaker!)`, which returns a
+`PickemLeg`; the input takes the same `type`, `value` (an Int) and `game_id`,
+all optional to the schema. Read it back through `get_pickem_legs` like any
+other write.
+
+**An undocumented mutation's signature can be read without sending it.** A
+call with no arguments, or with a field that does not exist, fails GraphQL
+validation before anything executes, and the errors name every required
+argument and its type. That is how the tiebreaker mutation above was mapped.
 
 **`get_pickem_picks_for_league(league_id, leg_id, include_tiebreaker)`** returns
 a Map keyed by roster id as a STRING, each value `{picks, tiebreaker}` where

@@ -28,6 +28,14 @@ PICKEM_ROSTER = 1
 PREV_LEAGUE = "110"
 ROSTER = 1
 
+# The entry's week-5 tiebreaker is a MAP, as get_pickem_legs returns it — this
+# fixture once said a bare 40, which `pickem_status` cannot render. Mutable,
+# so `set_pickem_tiebreaker` can be verified by reading it back; `install`
+# resets it for every test.
+TIEBREAKER_DEFAULT = {"type": "total_points", "value": 40, "game_id": "g2",
+                      "updated_at": 1757272204863}
+TIEBREAKER: dict = {}
+
 PLAYERS = {
     "qb1": {"full_name": "Ant Quarterback", "position": "QB", "team": "AAA"},
     "rb1": {"full_name": "Bee Runner", "position": "RB", "team": "AAA"},
@@ -179,6 +187,13 @@ async def rest(path: str):
     raise Unfixtured(f"REST {path}")
 
 
+def _needs_token(op: str, auth: bool) -> None:
+    # What Sleeper sends a tokenless call to an authenticated operation: a
+    # GraphQL error reading "Unauthorized", which client.gql raises as this.
+    if not auth:
+        raise RuntimeError(f"{op}: Unauthorized")
+
+
 async def gql(query: str, variables=None, auth: bool = False):
     q = " ".join(query.split())
     if "weekly_stats" in q:
@@ -222,12 +237,31 @@ async def gql(query: str, variables=None, auth: bool = False):
                                            "rec_td": 1}}]}
     if "trending_players" in q:
         return {"trending_players": [{"player_id": "wr3", "count": 900}]}
+    if "scores(sport" in q:
+        # The GraphQL scoreboard carries the same games as the REST one.
+        board = await rest("/scores/nfl/regular/2026/5")
+        return {"scores": [{"game_id": g["game_id"], "metadata": g["metadata"]}
+                           for g in board]}
+    if "set_pickem_tiebreaker" in q:
+        _needs_token("set_pickem_tiebreaker", auth)
+        TIEBREAKER.clear()
+        TIEBREAKER.update({**variables["tb"], "updated_at": 1757272300000})
+        return {"set_pickem_tiebreaker": {"leg_id": variables["leg"]}}
     if "get_pickem_legs" in q:
+        # Pick'em reads are authenticated, and this returns EVERY week's leg
+        # with the earliest first — so a tool that takes legs[0] reads last
+        # week, and the week-4 leg below is here to make that visible.
+        _needs_token("get_pickem_legs", auth)
         return {"get_pickem_legs": [
+            {"leg_id": "v1:regular:4", "status": "complete",
+             "num_expected_picks": 2,
+             "picks": {"g9": {"team": "CCC", "outcome": "win"}},
+             "tiebreaker": {"type": "total_points", "value": 33,
+                            "game_id": "g9", "updated_at": 1756667404863}},
             {"leg_id": "v1:regular:5", "status": "open",
              "num_expected_picks": 2,
              "picks": {"g1": {"team": "AAA", "outcome": "win"}},
-             "tiebreaker": 40}]}
+             "tiebreaker": dict(TIEBREAKER)}]}
     if "get_pickem_picks_for_league" in q:
         return {"get_pickem_picks_for_league": {
             "1": {"picks": {"g1": {"team": "AAA", "outcome": "win"},
@@ -271,4 +305,6 @@ def install(monkeypatch):
     monkeypatch.setattr(client, "DEFAULT_PICKEM_ROSTER", PICKEM_ROSTER)
     monkeypatch.setattr(client, "TOKEN", "fake.fake.fake")
     monkeypatch.setattr(client, "WRITES_ENABLED", False)
+    TIEBREAKER.clear()
+    TIEBREAKER.update(TIEBREAKER_DEFAULT)
     client.cache_clear()

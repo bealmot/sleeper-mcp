@@ -148,7 +148,7 @@ executes immediately with no veto window.
 
 **Writes** — `set_lineup` · `waiver_claim` · `cancel_claim` · `set_ir` ·
 `trade_block` · `propose_trade` · `respond_trade` · `pickem_pick` ·
-`watch_player` · `set_keepers`
+`pickem_tiebreaker` · `watch_player` · `set_keepers`
 
 **Optional, bring your own data** — `signal_divergence` · `player_signal` ·
 `trade_targets`. Inert unless you point `SLEEPER_SIGNAL_FILE` at a JSON file of

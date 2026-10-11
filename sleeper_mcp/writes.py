@@ -446,6 +446,86 @@ async def pickem_pick(game_id: str, team: str, week: int = 0,
 
 
 @mcp.tool()
+async def pickem_tiebreaker(total_points: int, game_id: str = "",
+                            week: int = 0, pickem_league: str = "",
+                            pickem_roster: int = 0,
+                            confirm: bool = False) -> str:
+    """WRITE. Set your pick'em tiebreaker — the combined score of one game.
+
+    The game is the pool's tiebreaker game, usually the week's last kickoff.
+    Leave game_id blank to keep the game your entry already has;
+    `pickem_status` shows it. Without this tool the tiebreaker can only be
+    changed in the mobile app, so a desktop user could fix every pick but not
+    the one number that splits ties.
+
+    Args:
+        total_points: Predicted points scored by both teams, e.g. 47.
+        game_id: Sleeper game id. Blank (default) keeps the entry's game.
+        week: NFL week. 0 (default) uses the current week.
+        pickem_league: Defaults to SLEEPER_PICKEM_LEAGUE.
+        pickem_roster: Defaults to SLEEPER_PICKEM_ROSTER.
+        confirm: Must be True to send. Default False = dry run.
+    """
+    from .client import DEFAULT_PICKEM_LEAGUE, DEFAULT_PICKEM_ROSTER
+    lg = (pickem_league or DEFAULT_PICKEM_LEAGUE).strip()
+    rid = pickem_roster or DEFAULT_PICKEM_ROSTER
+    if not lg or rid is None:
+        raise ConfigError("Needs SLEEPER_PICKEM_LEAGUE and "
+                          "SLEEPER_PICKEM_ROSTER (or the arguments).")
+    if not 0 <= total_points <= 200:
+        return (f"Refused, nothing sent: total_points must be 0-200, "
+                f"got {total_points}.")
+    wk = week or await current_week()
+    leg_id = f"v1:regular:{wk}"
+
+    async def read_leg():
+        # AUTHENTICATED, and it returns EVERY week's leg, so select by
+        # leg_id — the first leg is not the current week.
+        d = await gql('{get_pickem_legs(league_id:"%s",roster_id:%d)'
+                      '{leg_id tiebreaker}}' % (lg, rid), auth=True)
+        return next((x for x in (d.get("get_pickem_legs") or [])
+                     if x.get("leg_id") == leg_id), None)
+
+    leg = await read_leg()
+    if leg is None:
+        return f"Refused, nothing sent: no pick'em leg for week {wk}."
+    old = leg.get("tiebreaker") or {}
+    gid = (game_id or "").strip() or str(old.get("game_id") or "")
+    if not gid:
+        return ("Refused, nothing sent: this entry has no tiebreaker game "
+                "yet, so pass game_id (the pool's tiebreaker game, usually "
+                "the week's last kickoff; `pickem_status` lists the ids).")
+    was = (f" (was {old.get('value')} on game {old.get('game_id')})"
+           if old.get("value") is not None else "")
+    if not confirm:
+        return (f"DRY RUN — would set the tiebreaker to {total_points} total "
+                f"points on game {gid}{was}. Call again with confirm=True.")
+
+    require_writes("pickem_tiebreaker")
+    cache_clear()
+    # The input is the same {type, value, game_id} Map that get_pickem_legs
+    # returns; every field is optional to the schema, so send all three.
+    await gql(
+        "mutation($lg:Snowflake!,$rid:Int!,$leg:String!,"
+        "$tb:InputPickemTiebreaker!){set_pickem_tiebreaker(league_id:$lg,"
+        "roster_id:$rid,leg_id:$leg,tiebreaker:$tb){leg_id}}",
+        {"lg": lg, "rid": rid, "leg": leg_id,
+         "tb": {"type": "total_points", "value": total_points,
+                "game_id": gid}}, auth=True)
+    # Read back through get_pickem_legs, not the mutation's own reply, and a
+    # read-back that throws is not evidence the write failed.
+    try:
+        back = await read_leg()
+    except Exception as e:
+        return (f"WRITE SENT, VERIFICATION FAILED ({e.__class__.__name__}). "
+                f"Check `pickem_status` rather than assuming either way.")
+    now = (back or {}).get("tiebreaker") or {}
+    ok = now.get("value") == total_points and str(now.get("game_id")) == gid
+    return (f"{'VERIFIED' if ok else 'MISMATCH'} — tiebreaker is now "
+            f"{now.get('value')} on game {now.get('game_id')}{was}.")
+
+
+@mcp.tool()
 async def watch_player(player_name: str, unwatch: bool = False) -> str:
     """WRITE. Add or remove a player from your Sleeper watchlist.
 
