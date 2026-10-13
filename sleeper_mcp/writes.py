@@ -417,10 +417,21 @@ async def pickem_pick(game_id: str, team: str, week: int = 0,
                           "SLEEPER_PICKEM_ROSTER (or the arguments).")
     wk = week or await current_week()
     leg_id = f"v1:regular:{wk}"
-    cur = await gql('{get_pickem_legs(league_id:"%s",roster_id:%d){picks}}'
-                    % (lg, rid))
-    legs = cur.get("get_pickem_legs") or []
-    old = ((legs[0].get("picks") or {}).get(game_id) if legs else None)
+
+    async def read_leg():
+        # AUTHENTICATED, and it returns EVERY week's leg with the earliest
+        # first, so select by leg_id — the first leg is not the current week.
+        # This read used to go out without a token (Sleeper: Unauthorized, so
+        # even the dry run raised) and took legs[0], which read last week.
+        d = await gql('{get_pickem_legs(league_id:"%s",roster_id:%d)'
+                      '{leg_id picks}}' % (lg, rid), auth=True)
+        return next((x for x in (d.get("get_pickem_legs") or [])
+                     if x.get("leg_id") == leg_id), None)
+
+    leg = await read_leg()
+    if leg is None:
+        return f"Refused, nothing sent: no pick'em leg for week {wk}."
+    old = (leg.get("picks") or {}).get(game_id)
     was = f" (currently {old['team']})" if old else ""
     if not confirm:
         return (f"DRY RUN — would pick {team} in game {game_id}{was}. "
@@ -436,10 +447,13 @@ async def pickem_pick(game_id: str, team: str, week: int = 0,
          "lg": lg, "rid": rid, "leg": leg_id,
          "old": ({"game_id": game_id, "team": old["team"], "outcome": "win"}
                  if old else None)}, auth=True)
-    back = await gql('{get_pickem_legs(league_id:"%s",roster_id:%d){picks}}'
-                     % (lg, rid))
-    now = (((back.get("get_pickem_legs") or [{}])[0].get("picks") or {})
-           .get(game_id) or {})
+    # A read-back that throws is not evidence the write failed.
+    try:
+        back = await read_leg()
+    except Exception as e:
+        return (f"WRITE SENT, VERIFICATION FAILED ({e.__class__.__name__}). "
+                f"Check `pickem_status` rather than assuming either way.")
+    now = ((back or {}).get("picks") or {}).get(game_id) or {}
     ok = now.get("team") == team
     return (f"{'VERIFIED' if ok else 'MISMATCH'} — game {game_id} is now "
             f"{now.get('team')}{was}.")

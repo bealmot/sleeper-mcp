@@ -420,3 +420,66 @@ async def test_pickem_tiebreaker_refuses_a_week_with_no_leg(sleeper):
     from sleeper_mcp.writes import pickem_tiebreaker
     out = await call(pickem_tiebreaker, total_points=47, week=9)
     assert "Refused" in out and "week 9" in out
+
+
+# --- pick'em picks -----------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_pickem_pick_dry_run_reads_the_entry_with_a_token(sleeper):
+    """The pre-read is authenticated. It was sent without a token, Sleeper
+    answered Unauthorized, and the tool raised before it could say anything —
+    on a dry run, so nothing could be changed from a desktop at all."""
+    from sleeper_mcp.writes import pickem_pick
+    out = await call(pickem_pick, game_id="g1", team="BBB")
+    assert "DRY RUN" in out
+    assert "would pick BBB in game g1 (currently AAA)" in out
+    assert sleeper.PICKS["g1"]["team"] == "AAA" and not sleeper.LAST_PICK
+
+
+@pytest.mark.asyncio
+async def test_pickem_pick_refuses_while_writes_are_off(sleeper):
+    from sleeper_mcp.client import WritesDisabled
+    from sleeper_mcp.writes import pickem_pick
+    with pytest.raises(WritesDisabled):
+        await call(pickem_pick, game_id="g2", team="BBB", confirm=True)
+    assert "g2" not in sleeper.PICKS and not sleeper.LAST_PICK
+
+
+@pytest.mark.asyncio
+async def test_pickem_pick_makes_a_new_pick_and_verifies_this_weeks_leg(
+        sleeper, monkeypatch):
+    """The read-back must select the week's leg by id. get_pickem_legs returns
+    every week with the earliest first, so taking legs[0] looks at week 4,
+    finds nothing for this game, and calls a pick that landed a MISMATCH."""
+    from sleeper_mcp import client
+    from sleeper_mcp.writes import pickem_pick
+    monkeypatch.setattr(client, "WRITES_ENABLED", True)
+    out = await call(pickem_pick, game_id="g2", team="BBB", confirm=True)
+    assert out.startswith("VERIFIED"), out
+    assert sleeper.PICKS["g2"] == {"team": "BBB", "outcome": "win"}
+    assert sleeper.LAST_PICK["leg"] == "v1:regular:5"
+    assert sleeper.LAST_PICK["old"] is None
+
+
+@pytest.mark.asyncio
+async def test_pickem_pick_changes_a_pick_and_names_the_one_it_replaces(
+        sleeper, monkeypatch):
+    from sleeper_mcp import client
+    from sleeper_mcp.writes import pickem_pick
+    monkeypatch.setattr(client, "WRITES_ENABLED", True)
+    out = await call(pickem_pick, game_id="g1", team="CCC", confirm=True)
+    assert out.startswith("VERIFIED") and "(currently AAA)" in out, out
+    assert sleeper.PICKS["g1"]["team"] == "CCC"
+    assert sleeper.LAST_PICK["old"]["team"] == "AAA"
+
+
+@pytest.mark.asyncio
+async def test_pickem_pick_refuses_a_week_with_no_leg(sleeper, monkeypatch):
+    """Writing into a leg that does not exist is not a pick."""
+    from sleeper_mcp import client
+    from sleeper_mcp.writes import pickem_pick
+    monkeypatch.setattr(client, "WRITES_ENABLED", True)
+    out = await call(pickem_pick, game_id="g1", team="BBB", week=9,
+                     confirm=True)
+    assert "Refused" in out and "week 9" in out
+    assert not sleeper.LAST_PICK
