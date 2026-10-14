@@ -36,6 +36,7 @@ import httpx
 
 from . import config as _config
 from .boundaries import check as _policy_check
+from .lookup import fill_defense_names
 
 # SUPPORTS BOTH MAJOR VERSIONS OF THE MCP SDK.
 #
@@ -244,7 +245,12 @@ async def players() -> dict:
     for the slot they are assigned to". Resolve against a ROSTER where possible,
     and always prefer ids.
     """
-    return await _cached("players", "players", lambda: rest("/players/nfl"))
+    async def load() -> dict:
+        # Sleeper gives a team defence no full_name; without one no tool can
+        # find it by name. See lookup.fill_defense_names.
+        return fill_defense_names(await rest("/players/nfl"))
+
+    return await _cached("players", "players", load)
 
 
 async def league(lg: str | None = None) -> dict:

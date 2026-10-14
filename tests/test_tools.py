@@ -483,3 +483,45 @@ async def test_pickem_pick_refuses_a_week_with_no_leg(sleeper, monkeypatch):
                      confirm=True)
     assert "Refused" in out and "week 9" in out
     assert not sleeper.LAST_PICK
+
+
+# --- claiming a team defence -------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_the_player_dictionary_names_every_defence(sleeper):
+    """Sleeper's dictionary has no full_name for a defence. The loader must
+    build one, or no tool that matches on names can ever see a defence."""
+    from sleeper_mcp import client
+    P = await client.players()
+    assert P["BBB"]["full_name"] == "Bayside Badgers"
+    assert P["AAA"]["full_name"] == "Anytown Aardvarks"
+
+
+@pytest.mark.asyncio
+async def test_waiver_claim_can_add_a_team_defence_by_name(sleeper):
+    """The Vikings DEF could not be claimed: 'Minnesota Vikings', 'Vikings' and
+    'MIN' were all refused. Each of these must now resolve to the one defence."""
+    from sleeper_mcp.writes import waiver_claim
+    for typed in ("Bayside Badgers", "Badgers", "bayside"):
+        out = await call(waiver_claim, add_player=typed,
+                         drop_player="Jay Runner", bid=5)
+        assert out.startswith("DRY RUN"), (typed, out)
+        assert "ADD   Bayside Badgers" in out and "BID   $5" in out, out
+
+
+@pytest.mark.asyncio
+async def test_waiver_claim_refuses_a_defence_you_already_own(sleeper):
+    """Anytown Aardvarks is on the fake roster, so it is not a free agent."""
+    from sleeper_mcp.writes import waiver_claim
+    out = await call(waiver_claim, add_player="Aardvarks",
+                     drop_player="Jay Runner")
+    assert out.startswith("Refused") and "free-agent pool" in out, out
+
+
+@pytest.mark.asyncio
+async def test_waiver_claim_shows_the_defence_being_dropped_by_name(sleeper):
+    """The plan line printed 'None' for a defence: it read full_name."""
+    from sleeper_mcp.writes import waiver_claim
+    out = await call(waiver_claim, add_player="Fox Catcher",
+                     drop_player="Aardvarks")
+    assert "DROP  Anytown Aardvarks" in out, out

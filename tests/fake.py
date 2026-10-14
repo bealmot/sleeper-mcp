@@ -53,7 +53,15 @@ PLAYERS = {
     "te1": {"full_name": "Gnu Tight", "position": "TE", "team": "AAA"},
     "k1": {"full_name": "Hen Kicker", "position": "K", "team": "BBB"},
     "rb3": {"full_name": "Jay Runner", "position": "RB", "team": "CCC"},
-    "AAA": {"full_name": "Aardvarks", "position": "DEF", "team": "AAA"},
+    # TEAM DEFENCES HAVE NO full_name IN SLEEPER'S DICTIONARY — only first_name
+    # ("Minnesota") and last_name ("Vikings"). This fixture once carried a
+    # full_name, which made every name search look fine here and fail on real
+    # data: no defence could be found by name, so waiver_claim could never add
+    # one. Keep these shaped like the real thing. "BBB" is a FREE defence.
+    "AAA": {"first_name": "Anytown", "last_name": "Aardvarks",
+            "position": "DEF", "team": "AAA"},
+    "BBB": {"first_name": "Bayside", "last_name": "Badgers",
+            "position": "DEF", "team": "BBB"},
     # A retired duplicate with no team — the Kenneth Walker shape.
     "rb1_old": {"full_name": "Bee Runner", "position": "RB", "team": None},
     # A coach, who must never be matchable.
