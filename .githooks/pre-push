@@ -6,6 +6,9 @@
 #
 #     git config core.hooksPath .githooks
 #
+# The hook runs one environment. Before a merge, or after a dependency change,
+# run the legs a hosted CI would: python3 scripts/check.py --matrix
+#
 # To push past a failure deliberately: git push --no-verify
 set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"

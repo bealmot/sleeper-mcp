@@ -18,6 +18,8 @@ general tidiness:
   tests         pytest
   coverage      total lines, against a floor that only moves up
   install       --fresh only: resolve and import in a CLEAN venv
+  matrix        --matrix only: all of the above on each supported Python and
+                mcp version, the legs a hosted CI would run
 
 PRIVACY IS THE ONE THAT EARNS ITS KEEP. This server was extracted from a
 private homelab server that is still in use, and the natural way to add a
@@ -286,6 +288,112 @@ def check_fresh_install() -> bool:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+# The environments --matrix runs. This repo has no hosted CI on purpose (see
+# .githooks/pre-push), so the legs a CI service would run live here:
+#
+#   3.10 latest   the oldest Python in requires-python, newest dependencies
+#   3.12 latest   plus --fresh
+#   3.10 floor    mcp at the floor in pyproject.toml, so the mcp 1.x branch
+#                 of the SDK shim in client.py actually runs. mcp 1.7.0 sets
+#                 no upper bound on pydantic and does not import with pydantic
+#                 2.12 or later, so that pin is part of the floor.
+MATRIX = [
+    ("3.10 latest", "3.10", False, []),
+    ("3.12 latest", "3.12", True, []),
+    ("3.10 floor", "3.10", False, ["pydantic<2.12"]),
+]
+
+
+def _mcp_floor() -> str | None:
+    m = re.search(r'"mcp>=([0-9.]+)"', (ROOT / "pyproject.toml").read_text())
+    return m.group(1) if m else None
+
+
+def check_matrix() -> bool:
+    """Run every check in each MATRIX leg, each in a clean venv and worktree.
+
+    A CLEAN WORKTREE, NOT THIS CHECKOUT. _test_python prefers ./.venv, so a
+    leg run here silently tests the project venv instead of its own
+    interpreter. That happened while this was being built: three legs
+    "passed" on one Python and one mcp. A detached worktree has no .venv.
+
+    It tests HEAD, the commit you would push, so uncommitted edits are not in
+    it. Each leg installs in ONE resolve: installing the newest mcp and then
+    downgrading it leaves mcp-types behind, and the floor leg would then test
+    a mix of the two SDKs.
+
+    Needs uv, which fetches the Python versions it lacks. Slow (about two
+    minutes), so it is opt-in, like --fresh.
+    """
+    import shutil
+    import tempfile
+    if not shutil.which("uv"):
+        return fail("matrix — uv is not installed", [
+            "uv creates the venvs and fetches the Python versions.",
+            "    https://docs.astral.sh/uv/"])
+    floor = _mcp_floor()
+    if not floor:
+        return fail('matrix — no "mcp>=X" floor found in pyproject.toml')
+    dirty = subprocess.run(["git", "status", "--porcelain",
+                            "--untracked-files=no"],
+                           capture_output=True, text=True, cwd=ROOT).stdout
+    if dirty.strip():
+        print(f"  {DIM}note  matrix tests HEAD; uncommitted edits are not in "
+              f"it{OFF}")
+    tmp = pathlib.Path(tempfile.mkdtemp(prefix="sleeper-mcp-matrix-"))
+    tree = tmp / "tree"
+    bad = []
+    try:
+        r = subprocess.run(["git", "worktree", "add", "-q", "--detach",
+                            str(tree), "HEAD"],
+                           capture_output=True, text=True, cwd=ROOT)
+        if r.returncode:
+            return fail("matrix — could not create a worktree",
+                        r.stderr.splitlines()[-5:])
+        for name, version, fresh, pins in MATRIX:
+            is_floor = "floor" in name
+            venv = tmp / name.replace(" ", "-")
+            py = str(venv / "bin" / "python")
+            reqs = [".[dev]"] + ([f"mcp=={floor}", *pins] if is_floor else [])
+            r = subprocess.run(["uv", "venv", "-q", "--python", version,
+                                str(venv)],
+                               capture_output=True, text=True, cwd=tree)
+            if r.returncode == 0:
+                r = subprocess.run(["uv", "pip", "install", "-q", "--python",
+                                    py, "-e", *reqs],
+                                   capture_output=True, text=True, cwd=tree)
+            if r.returncode:
+                bad += [f"{name}: setup failed",
+                        *(f"    {l}" for l in
+                          (r.stderr or r.stdout).splitlines()[-5:])]
+                continue
+            if is_floor and subprocess.run(
+                    ["uv", "pip", "show", "--python", py, "mcp-types"],
+                    capture_output=True).returncode == 0:
+                bad.append(f"{name}: mcp-types is installed beside "
+                           f"mcp {floor}")
+                continue
+            r = subprocess.run([py, "scripts/check.py"]
+                               + (["--fresh"] if fresh else []),
+                               capture_output=True, text=True, cwd=tree)
+            out = re.sub(r"\033\[[0-9;]*m", "", r.stdout).splitlines()
+            if r.returncode:
+                bad += [f"{name}:", *(f"    {l.strip()}" for l in out
+                                      if "FAIL" in l
+                                      or l.startswith("        "))]
+            else:
+                tests = next((l.strip() for l in out if "tests —" in l), "")
+                print(f"  {DIM}      {name}: {tests}{OFF}")
+    finally:
+        subprocess.run(["git", "worktree", "remove", "--force", str(tree)],
+                       capture_output=True, cwd=ROOT)
+        shutil.rmtree(tmp, ignore_errors=True)
+    if bad:
+        return fail("matrix", bad)
+    return ok(f"matrix ({', '.join(n for n, *_ in MATRIX)}; "
+              f"mcp floor {floor})")
+
+
 def _test_python() -> str:
     """The interpreter to run tests with.
 
@@ -382,6 +490,9 @@ def main() -> int:
     ap.add_argument("--fresh", action="store_true",
                     help="also resolve and import in a clean venv (slow, "
                          "downloads; catches broken dependency pins)")
+    ap.add_argument("--matrix", action="store_true",
+                    help="also run every check on each Python and mcp in "
+                         "MATRIX, in clean venvs (slow; needs uv)")
     args = ap.parse_args()
 
     print(f"{DIM}sleeper-mcp local checks — {ROOT}{OFF}")
@@ -393,6 +504,11 @@ def main() -> int:
     else:
         print(f"  {DIM}skip{OFF}  install — run with --fresh to resolve "
               f"dependencies in a clean venv")
+    if args.matrix:
+        results.append(check_matrix())
+    else:
+        print(f"  {DIM}skip{OFF}  matrix — run with --matrix to check every "
+              f"supported Python and mcp")
     failed = results.count(False)
     print()
     if failed:
