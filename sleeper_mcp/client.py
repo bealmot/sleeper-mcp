@@ -30,7 +30,12 @@ ids? Call `find_my_leagues("<your username>")`. Everything it needs is public.
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
+import os
+import pathlib
+import time
 
 import httpx
 
@@ -68,6 +73,11 @@ except ImportError:                     # mcp 1.x
 # request log quiet by default.
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+# This server's own warnings: a 429 retry, a stale player dictionary. They go
+# to stderr, which an MCP client keeps in its server log; stdout is the
+# protocol and must never carry them.
+_log = logging.getLogger("sleeper_mcp")
 
 mcp = _Server("sleeper")
 
@@ -176,6 +186,39 @@ def require_writes(action: str) -> None:
             f"at all.")
 
 
+# 429: Sleeper asks the caller to slow down. A 429 means the request was NOT
+# processed, so sending it again is safe, a mutation included. Retry a few
+# times and honour Retry-After, but cap each wait: a tool call that sleeps
+# for ten minutes looks like a hang, and an error the user can see is better.
+# Retry-After in the HTTP-date form is not parsed; it falls back to doubling.
+# Nothing else is retried. A 500 or a timeout is reported as it happened.
+_RETRIES = 3
+_MAX_WAIT = 30.0
+_sleep = asyncio.sleep                  # replaced in tests
+
+
+def _http(timeout: float) -> httpx.AsyncClient:
+    """Every request's client. A seam, so tests can give it a MockTransport."""
+    return httpx.AsyncClient(timeout=timeout)
+
+
+async def _send(c: httpx.AsyncClient, what: str, method: str, url: str,
+                **kw) -> httpx.Response:
+    for attempt in range(_RETRIES + 1):
+        r = await c.request(method, url, **kw)
+        if r.status_code != 429 or attempt == _RETRIES:
+            return r
+        try:
+            wait = float(r.headers.get("retry-after", ""))
+        except ValueError:
+            wait = 2.0 * 2 ** attempt
+        wait = min(max(wait, 0.0), _MAX_WAIT)
+        _log.warning("Sleeper answered 429 to %s; retry %d of %d in %.0f s",
+                     what, attempt + 1, _RETRIES, wait)
+        await _sleep(wait)
+    raise AssertionError("unreachable")
+
+
 async def gql(query: str, variables: dict | None = None,
               auth: bool = False) -> dict:
     """POST to Sleeper's GraphQL.
@@ -197,8 +240,9 @@ async def gql(query: str, variables: dict | None = None,
     body: dict = {"query": query}
     if variables:
         body["variables"] = variables
-    async with httpx.AsyncClient(timeout=45) as c:
-        r = await c.post(GQL, json=body, headers=headers)
+    async with _http(45) as c:
+        r = await _send(c, "a GraphQL query", "POST", GQL, json=body,
+                        headers=headers)
         if r.status_code == 401:
             # The bare 401 is the single most common support question, and
             # the cause is almost always the token's delivery, not Sleeper.
@@ -218,8 +262,8 @@ async def rest(path: str):
     lineup for minutes after a successful mutation.
     """
     _policy_check(path)
-    async with httpx.AsyncClient(timeout=30) as c:
-        r = await c.get(f"{REST}{path}", headers=UA)
+    async with _http(30) as c:
+        r = await _send(c, path, "GET", f"{REST}{path}", headers=UA)
         r.raise_for_status()
         return r.json()
 
@@ -259,11 +303,58 @@ async def _cached(key: str, kind: str, fetch):
     return value
 
 
+# The player dictionary ON DISK. The memory cache dies with the process, and
+# an MCP server is a process per client session, so every new session
+# downloaded 5 MB before its first answer. The disk copy uses the same TTL as
+# memory: freshness does not change, only who pays for the download.
+#
+# It is also the fallback when Sleeper fails: a copy up to _STALE_LIMIT old is
+# used, with a warning that gives its age. Player names and positions barely
+# move in a week; injury tags do, which is why the age is stated and why an
+# older copy is refused rather than served.
+_STALE_LIMIT = 7 * 86400.0
+
+
+def cache_dir() -> pathlib.Path:
+    """SLEEPER_MCP_CACHE if set, else $XDG_CACHE_HOME/sleeper-mcp."""
+    explicit = (os.environ.get("SLEEPER_MCP_CACHE") or "").strip()
+    if explicit:
+        return pathlib.Path(explicit).expanduser()
+    base = (os.environ.get("XDG_CACHE_HOME") or "").strip()
+    root = pathlib.Path(base) if base else pathlib.Path.home() / ".cache"
+    return root / "sleeper-mcp"
+
+
+def _disk_read(name: str) -> tuple[float, dict] | None:
+    """(age in seconds, contents), or None if missing or unreadable."""
+    path = cache_dir() / f"{name}.json"
+    try:
+        age = time.time() - path.stat().st_mtime
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return (age, value) if isinstance(value, dict) else None
+
+
+def _disk_write(name: str, value: dict) -> None:
+    """Replace the copy atomically. A failed write costs a download, so it is
+    logged, never raised: it must not fail the read that triggered it."""
+    path = cache_dir() / f"{name}.json"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(value), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError as e:
+        _log.warning("could not save %s to %s: %s", name, path, e)
+
+
 async def players() -> dict:
     """The full NFL player dictionary — about 5 MB, ~11,000 entries.
 
-    Cached for 15 minutes: it is fetched by nearly every tool and changes only
-    when news lands.
+    Cached for 15 minutes, in memory and on disk (see cache_dir): it is
+    fetched by nearly every tool and changes only when news lands. When
+    Sleeper fails, a disk copy up to a week old is used, and the log says so.
 
     CAUTION: names are NOT unique and the dictionary includes retired players.
     "Kenneth Walker" matches two entries, one of them inactive. Resolving a
@@ -273,9 +364,24 @@ async def players() -> dict:
     and always prefer ids.
     """
     async def load() -> dict:
+        disk = _disk_read("players")
+        if disk and disk[0] < _TTL["players"]:
+            raw = disk[1]
+        else:
+            try:
+                raw = await rest("/players/nfl")
+            except (httpx.HTTPError, ValueError) as e:
+                if not disk or disk[0] > _STALE_LIMIT:
+                    raise
+                _log.warning("Sleeper failed (%s); using the player "
+                             "dictionary cached %.0f h ago", e,
+                             disk[0] / 3600)
+                raw = disk[1]
+            else:
+                _disk_write("players", raw)
         # Sleeper gives a team defence no full_name; without one no tool can
         # find it by name. See lookup.fill_defense_names.
-        return fill_defense_names(await rest("/players/nfl"))
+        return fill_defense_names(raw)
 
     return await _cached("players", "players", load)
 
