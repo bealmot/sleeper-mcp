@@ -5,13 +5,13 @@ from __future__ import annotations
 import datetime as dt
 
 from .client import (AuthError, ConfigError, current_week, gql, league,
-                     league_id, mcp, owners, players, rest, roster_id,
+                     league_id, READ, mcp, owners, players, rest, roster_id,
                      scored, state)
 from .lookup import ambiguous, find_player
 from .season import confidence, team_strength
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 async def roster(league_id_: str = "", roster_id_: int = 0,
                  week: int = 0) -> str:
     """Your roster with weekly projections, scored under THIS league's rules.
@@ -77,7 +77,7 @@ async def roster(league_id_: str = "", roster_id_: int = 0,
     return "\n".join(out)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 async def matchup(league_id_: str = "", week: int = 0) -> str:
     """This week's matchups and every team's projected total.
 
@@ -125,7 +125,7 @@ async def matchup(league_id_: str = "", week: int = 0) -> str:
     return "\n".join(out)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 async def standings(league_id_: str = "") -> str:
     """League standings with points for, against, and a shrunk per-week rate.
 
@@ -182,7 +182,7 @@ async def standings(league_id_: str = "") -> str:
     return "\n".join(out)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 async def player_news(player_name: str, limit: int = 4) -> str:
     """Recent beat reporting for one NFL player.
 
@@ -214,7 +214,7 @@ async def player_news(player_name: str, limit: int = 4) -> str:
     return "\n".join(out)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 async def player_outlook(player_name: str, season: str = "") -> str:
     """A written season outlook for one player, if one has been published.
 
@@ -241,7 +241,7 @@ async def player_outlook(player_name: str, season: str = "") -> str:
             f"{m.get('analysis') or m.get('description') or '(no text)'}")
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 async def transactions(league_id_: str = "", week: int = 0) -> str:
     """League adds, drops, trades and waiver bids for a week."""
     lg = league_id(league_id_ or None)
@@ -268,7 +268,7 @@ async def transactions(league_id_: str = "", week: int = 0) -> str:
     return "\n".join(out)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 async def pending(league_id_: str = "", week: int = 0) -> str:
     """Pending trades and waiver claims, with the ids needed to act on them.
 
@@ -299,7 +299,7 @@ async def pending(league_id_: str = "", week: int = 0) -> str:
     return "\n".join(out)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 async def draft_picks(league_id_: str = "") -> str:
     """Which future draft picks have changed hands.
 
@@ -331,7 +331,7 @@ async def draft_picks(league_id_: str = "") -> str:
     return "\n".join(out)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 async def chat(league_id_: str = "", limit: int = 25, search: str = "") -> str:
     """Read the league chat. Needs a token.
 
@@ -371,7 +371,7 @@ async def chat(league_id_: str = "", limit: int = 25, search: str = "") -> str:
     return "\n".join(out)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 async def watched_players() -> str:
     """Your Sleeper watchlist. Needs a token."""
     P = await players()
@@ -388,7 +388,7 @@ async def watched_players() -> str:
     return "\n".join(out)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 async def trending(kind: str = "add", limit: int = 25) -> str:
     """Players being added or dropped most across all Sleeper leagues.
 
@@ -414,7 +414,7 @@ async def trending(kind: str = "add", limit: int = 25) -> str:
     return "\n".join(out)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 async def pickem_status(week: int = 0, pickem_league: str = "",
                         pickem_roster: int = 0) -> str:
     """Your pick'em entry: which picks are in, and which are missing.
@@ -476,7 +476,7 @@ async def pickem_status(week: int = 0, pickem_league: str = "",
     return "\n".join(out)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 async def player_history(player_name: str, limit: int = 25,
                          league_id_: str = "") -> str:
     """Every time this league has added, dropped or traded one player.
@@ -557,7 +557,7 @@ async def player_history(player_name: str, limit: int = 25,
     return "\n".join(out)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 async def transaction_search(kind: str = "", status: str = "", week: int = 0,
                              manager: str = "", limit: int = 50,
                              league_id_: str = "") -> str:
@@ -675,7 +675,7 @@ async def transaction_search(kind: str = "", status: str = "", week: int = 0,
     return "\n".join(out)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 async def pickem_consensus(week: int = 0, pickem_league: str = "",
                            pickem_roster: int = 0) -> str:
     """What the whole pick'em pool picked, and where your entry stands apart.

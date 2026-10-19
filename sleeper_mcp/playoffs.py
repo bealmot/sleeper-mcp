@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 
-from .client import (current_week, gql, league, league_id, mcp, owners,
+from .client import (current_week, gql, league, league_id, READ, mcp, owners,
                      rest)
 from .season import (bracket_champion, bracket_rounds,
                      confidence as _confidence, ordinal,
@@ -68,7 +68,7 @@ async def _season(lg: str):
     return scores, remaining, records, playoff_teams, await owners(lg), wk
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 async def playoff_odds(trials: int = 10000, league_id_: str = "") -> str:
     """Playoff probability for every team, by simulating the rest of the season.
 
@@ -115,7 +115,7 @@ async def playoff_odds(trials: int = 10000, league_id_: str = "") -> str:
     return "\n".join(out)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 async def matchup_odds(week: int = 0, league_id_: str = "") -> str:
     """Win probability for every head-to-head matchup in a week.
 
@@ -151,7 +151,7 @@ async def matchup_odds(week: int = 0, league_id_: str = "") -> str:
     return "\n".join(out)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 async def schedule_strength(league_id_: str = "") -> str:
     """How hard each team's REMAINING schedule is.
 
@@ -191,7 +191,7 @@ async def schedule_strength(league_id_: str = "") -> str:
     return "\n".join(out)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 async def playoff_bracket(consolation: bool = False, previous: bool = False,
                           league_id_: str = "") -> str:
     """The actual playoff bracket — who plays whom, and who has won.
@@ -266,7 +266,7 @@ async def playoff_bracket(consolation: bool = False, previous: bool = False,
     return "\n".join(out).rstrip()
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 async def standings_trend(league_id_: str = "", previous: bool = False) -> str:
     """How the table has MOVED, week by week, not just where it stands.
 

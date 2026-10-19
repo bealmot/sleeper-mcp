@@ -53,7 +53,7 @@ from __future__ import annotations
 import json
 import os
 
-from .client import (current_week, gql, league, league_id, mcp, players, rest,
+from .client import (current_week, gql, league, league_id, READ, mcp, players, rest,
                      roster_id, scored)
 from .optimizer import percentile_within as _pct_within
 
@@ -95,7 +95,7 @@ def load() -> tuple[dict, str]:
     return rows, label
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 async def signal_divergence(min_evidence: int = 1, gap: int = 25,
                             limit: int = 15, league_id_: str = "",
                             week: int = 0) -> str:
@@ -196,7 +196,7 @@ async def signal_divergence(min_evidence: int = 1, gap: int = 25,
     return "\n".join(out)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 async def player_signal(player_name: str) -> str:
     """What your signal says about one player, next to Sleeper's own view."""
     sig, label = load()
@@ -225,7 +225,7 @@ async def player_signal(player_name: str) -> str:
     return "\n".join(out)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 async def trade_targets(min_evidence: int = 1, limit: int = 12,
                         league_id_: str = "", roster_id_: int = 0) -> str:
     """Mispriced players on RIVAL rosters, using revealed preference.

@@ -19,6 +19,31 @@ from __future__ import annotations
 FANTASY_POSITIONS = ("QB", "RB", "WR", "TE", "K", "DEF")
 
 
+def fill_defense_names(P: dict) -> dict:
+    """Give every entry that has no `full_name` one, in place, and return P.
+
+    SLEEPER'S DICTIONARY DOES NOT NAME A TEAM DEFENCE. A defence carries a
+    `first_name` ("Minnesota") and a `last_name` ("Vikings") and either no
+    `full_name` or a null one. Every name search in this package matches on
+    `full_name`, so a defence could not be found by name: `waiver_claim` refused
+    "Minnesota Vikings" and "Vikings", and "MIN" matched seven unrelated players
+    as a substring instead. A claim for the best defence in the league had to be
+    sent around the tool.
+
+    This is applied once, where the dictionary is loaded, so every tool that
+    searches or prints a name sees the same thing. An existing `full_name` is
+    never touched, and an entry with no name parts is left alone.
+    """
+    for v in P.values():
+        if not v or v.get("full_name"):
+            continue
+        name = " ".join(filter(None, ((v.get("first_name") or "").strip(),
+                                      (v.get("last_name") or "").strip())))
+        if name:
+            v["full_name"] = name
+    return P
+
+
 def find_player(P: dict, name: str,
                 pool: set | None = None) -> list[tuple[str, dict]]:
     """Every player whose name contains `name`. May return 0, 1 or many.

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 
-from .client import gql, league_id, mcp, players, rest
+from .client import gql, league_id, READ, mcp, players, rest
 from .lookup import ambiguous, find_player
 from .shares import collect, rank, trend
 
@@ -86,7 +86,7 @@ async def _completed(season: str | None) -> tuple[str, int, str]:
     return cur_season, cur_week - 1, cur_season
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 async def usage(player_name: str, weeks: int = 5, season: str = "") -> str:
     """How much work one player is actually getting, week by week.
 
@@ -150,7 +150,7 @@ async def usage(player_name: str, weeks: int = 5, season: str = "") -> str:
     return "\n".join(out)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 async def breakouts(position: str = "", weeks: int = 4, limit: int = 12,
                     min_snap_share: float = 0.25, season: str = "",
                     league_id_: str = "") -> str:
@@ -268,7 +268,7 @@ async def season_rows(season: str) -> list[dict]:
     return [{**r, "week": 0} for r in rows]
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 async def season_leaders(position: str = "", metric: str = "points",
                          per_game: bool = True, min_games: int = 4,
                          limit: int = 15, season: str = "") -> str:

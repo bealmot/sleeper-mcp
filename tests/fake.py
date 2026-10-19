@@ -36,6 +36,13 @@ TIEBREAKER_DEFAULT = {"type": "total_points", "value": 40, "game_id": "g2",
                       "updated_at": 1757272204863}
 TIEBREAKER: dict = {}
 
+# The entry's week-5 picks, mutable for the same reason: `make_pickem_pick` is
+# verified by reading the pick back. `LAST_PICK` records the mutation's
+# variables so a test can see what was actually sent (pick_to_replace, leg).
+PICKS_DEFAULT = {"g1": {"team": "AAA", "outcome": "win"}}
+PICKS: dict = {}
+LAST_PICK: dict = {}
+
 PLAYERS = {
     "qb1": {"full_name": "Ant Quarterback", "position": "QB", "team": "AAA"},
     "rb1": {"full_name": "Bee Runner", "position": "RB", "team": "AAA"},
@@ -46,7 +53,15 @@ PLAYERS = {
     "te1": {"full_name": "Gnu Tight", "position": "TE", "team": "AAA"},
     "k1": {"full_name": "Hen Kicker", "position": "K", "team": "BBB"},
     "rb3": {"full_name": "Jay Runner", "position": "RB", "team": "CCC"},
-    "AAA": {"full_name": "Aardvarks", "position": "DEF", "team": "AAA"},
+    # TEAM DEFENCES HAVE NO full_name IN SLEEPER'S DICTIONARY — only first_name
+    # ("Minnesota") and last_name ("Vikings"). This fixture once carried a
+    # full_name, which made every name search look fine here and fail on real
+    # data: no defence could be found by name, so waiver_claim could never add
+    # one. Keep these shaped like the real thing. "BBB" is a FREE defence.
+    "AAA": {"first_name": "Anytown", "last_name": "Aardvarks",
+            "position": "DEF", "team": "AAA"},
+    "BBB": {"first_name": "Bayside", "last_name": "Badgers",
+            "position": "DEF", "team": "BBB"},
     # A retired duplicate with no team — the Kenneth Walker shape.
     "rb1_old": {"full_name": "Bee Runner", "position": "RB", "team": None},
     # A coach, who must never be matchable.
@@ -247,6 +262,13 @@ async def gql(query: str, variables=None, auth: bool = False):
         TIEBREAKER.clear()
         TIEBREAKER.update({**variables["tb"], "updated_at": 1757272300000})
         return {"set_pickem_tiebreaker": {"leg_id": variables["leg"]}}
+    if "make_pickem_pick" in q:
+        _needs_token("make_pickem_pick", auth)
+        LAST_PICK.clear()
+        LAST_PICK.update(variables)
+        p = variables["p"]
+        PICKS[p["game_id"]] = {"team": p["team"], "outcome": p["outcome"]}
+        return {"make_pickem_pick": {"leg_id": variables["leg"]}}
     if "get_pickem_legs" in q:
         # Pick'em reads are authenticated, and this returns EVERY week's leg
         # with the earliest first — so a tool that takes legs[0] reads last
@@ -260,7 +282,7 @@ async def gql(query: str, variables=None, auth: bool = False):
                             "game_id": "g9", "updated_at": 1756667404863}},
             {"leg_id": "v1:regular:5", "status": "open",
              "num_expected_picks": 2,
-             "picks": {"g1": {"team": "AAA", "outcome": "win"}},
+             "picks": {g: dict(p) for g, p in PICKS.items()},
              "tiebreaker": dict(TIEBREAKER)}]}
     if "get_pickem_picks_for_league" in q:
         return {"get_pickem_picks_for_league": {
@@ -307,4 +329,7 @@ def install(monkeypatch):
     monkeypatch.setattr(client, "WRITES_ENABLED", False)
     TIEBREAKER.clear()
     TIEBREAKER.update(TIEBREAKER_DEFAULT)
+    PICKS.clear()
+    PICKS.update({g: dict(p) for g, p in PICKS_DEFAULT.items()})
+    LAST_PICK.clear()
     client.cache_clear()

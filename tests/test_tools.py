@@ -420,3 +420,108 @@ async def test_pickem_tiebreaker_refuses_a_week_with_no_leg(sleeper):
     from sleeper_mcp.writes import pickem_tiebreaker
     out = await call(pickem_tiebreaker, total_points=47, week=9)
     assert "Refused" in out and "week 9" in out
+
+
+# --- pick'em picks -----------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_pickem_pick_dry_run_reads_the_entry_with_a_token(sleeper):
+    """The pre-read is authenticated. It was sent without a token, Sleeper
+    answered Unauthorized, and the tool raised before it could say anything —
+    on a dry run, so nothing could be changed from a desktop at all."""
+    from sleeper_mcp.writes import pickem_pick
+    out = await call(pickem_pick, game_id="g1", team="BBB")
+    assert "DRY RUN" in out
+    assert "would pick BBB in game g1 (currently AAA)" in out
+    assert sleeper.PICKS["g1"]["team"] == "AAA" and not sleeper.LAST_PICK
+
+
+@pytest.mark.asyncio
+async def test_pickem_pick_refuses_while_writes_are_off(sleeper):
+    from sleeper_mcp.client import WritesDisabled
+    from sleeper_mcp.writes import pickem_pick
+    with pytest.raises(WritesDisabled):
+        await call(pickem_pick, game_id="g2", team="BBB", confirm=True)
+    assert "g2" not in sleeper.PICKS and not sleeper.LAST_PICK
+
+
+@pytest.mark.asyncio
+async def test_pickem_pick_makes_a_new_pick_and_verifies_this_weeks_leg(
+        sleeper, monkeypatch):
+    """The read-back must select the week's leg by id. get_pickem_legs returns
+    every week with the earliest first, so taking legs[0] looks at week 4,
+    finds nothing for this game, and calls a pick that landed a MISMATCH."""
+    from sleeper_mcp import client
+    from sleeper_mcp.writes import pickem_pick
+    monkeypatch.setattr(client, "WRITES_ENABLED", True)
+    out = await call(pickem_pick, game_id="g2", team="BBB", confirm=True)
+    assert out.startswith("VERIFIED"), out
+    assert sleeper.PICKS["g2"] == {"team": "BBB", "outcome": "win"}
+    assert sleeper.LAST_PICK["leg"] == "v1:regular:5"
+    assert sleeper.LAST_PICK["old"] is None
+
+
+@pytest.mark.asyncio
+async def test_pickem_pick_changes_a_pick_and_names_the_one_it_replaces(
+        sleeper, monkeypatch):
+    from sleeper_mcp import client
+    from sleeper_mcp.writes import pickem_pick
+    monkeypatch.setattr(client, "WRITES_ENABLED", True)
+    out = await call(pickem_pick, game_id="g1", team="CCC", confirm=True)
+    assert out.startswith("VERIFIED") and "(currently AAA)" in out, out
+    assert sleeper.PICKS["g1"]["team"] == "CCC"
+    assert sleeper.LAST_PICK["old"]["team"] == "AAA"
+
+
+@pytest.mark.asyncio
+async def test_pickem_pick_refuses_a_week_with_no_leg(sleeper, monkeypatch):
+    """Writing into a leg that does not exist is not a pick."""
+    from sleeper_mcp import client
+    from sleeper_mcp.writes import pickem_pick
+    monkeypatch.setattr(client, "WRITES_ENABLED", True)
+    out = await call(pickem_pick, game_id="g1", team="BBB", week=9,
+                     confirm=True)
+    assert "Refused" in out and "week 9" in out
+    assert not sleeper.LAST_PICK
+
+
+# --- claiming a team defence -------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_the_player_dictionary_names_every_defence(sleeper):
+    """Sleeper's dictionary has no full_name for a defence. The loader must
+    build one, or no tool that matches on names can ever see a defence."""
+    from sleeper_mcp import client
+    P = await client.players()
+    assert P["BBB"]["full_name"] == "Bayside Badgers"
+    assert P["AAA"]["full_name"] == "Anytown Aardvarks"
+
+
+@pytest.mark.asyncio
+async def test_waiver_claim_can_add_a_team_defence_by_name(sleeper):
+    """The Vikings DEF could not be claimed: 'Minnesota Vikings', 'Vikings' and
+    'MIN' were all refused. Each of these must now resolve to the one defence."""
+    from sleeper_mcp.writes import waiver_claim
+    for typed in ("Bayside Badgers", "Badgers", "bayside"):
+        out = await call(waiver_claim, add_player=typed,
+                         drop_player="Jay Runner", bid=5)
+        assert out.startswith("DRY RUN"), (typed, out)
+        assert "ADD   Bayside Badgers" in out and "BID   $5" in out, out
+
+
+@pytest.mark.asyncio
+async def test_waiver_claim_refuses_a_defence_you_already_own(sleeper):
+    """Anytown Aardvarks is on the fake roster, so it is not a free agent."""
+    from sleeper_mcp.writes import waiver_claim
+    out = await call(waiver_claim, add_player="Aardvarks",
+                     drop_player="Jay Runner")
+    assert out.startswith("Refused") and "free-agent pool" in out, out
+
+
+@pytest.mark.asyncio
+async def test_waiver_claim_shows_the_defence_being_dropped_by_name(sleeper):
+    """The plan line printed 'None' for a defence: it read full_name."""
+    from sleeper_mcp.writes import waiver_claim
+    out = await call(waiver_claim, add_player="Fox Catcher",
+                     drop_player="Aardvarks")
+    assert "DROP  Anytown Aardvarks" in out, out

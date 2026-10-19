@@ -19,7 +19,7 @@ league that deviates.
 
 from __future__ import annotations
 
-from .client import (current_week, gql, league, league_id, mcp, players, rest,
+from .client import (current_week, gql, league, league_id, READ, mcp, players, rest,
                      roster_id, scored, starting_slots)
 from .optimizer import best_lineup, eligible  # noqa: F401  (re-exported)
 
@@ -58,7 +58,7 @@ async def _pool(lg: str, rid: int, week: int):
     return pool, P, lgd
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 async def bye_outlook(league_id_: str = "", roster_id_: int = 0,
                       through_week: int = 17) -> str:
     """Which upcoming weeks you CANNOT field a legal lineup, and why.
@@ -114,7 +114,7 @@ async def bye_outlook(league_id_: str = "", roster_id_: int = 0,
     return "\n".join(out)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 async def waiver_targets(league_id_: str = "", roster_id_: int = 0,
                          week: int = 0, limit: int = 15,
                          position: str = "") -> str:

@@ -36,6 +36,7 @@ import httpx
 
 from . import config as _config
 from .boundaries import check as _policy_check
+from .lookup import fill_defense_names
 
 # SUPPORTS BOTH MAJOR VERSIONS OF THE MCP SDK.
 #
@@ -48,10 +49,19 @@ from .boundaries import check as _policy_check
 # Prefer the v2 name: a v1 install has no MCPServer, so the fallback is the
 # one that fires, and new installs get the current class without a deprecation
 # path to maintain.
+#
+# mcp 2.0 also moved the protocol types into their own package. ToolAnnotations
+# is the only one this server builds itself. Both imports hang off the SAME
+# test, the server class: a downgrade from 2.x can leave mcp_types installed
+# beside mcp 1.x, and probing mcp_types on its own would then mix the two.
+# annotations= on @tool() arrived in mcp 1.7.0, hence the floor in
+# pyproject.toml.
 try:                                    # mcp >= 2
     from mcp.server import MCPServer as _Server
+    from mcp_types import ToolAnnotations
 except ImportError:                     # mcp 1.x
     from mcp.server import FastMCP as _Server
+    from mcp.types import ToolAnnotations
 
 # httpx logs full request URLs at INFO. Nothing here puts a secret in a URL,
 # but a token in a header is one refactor away from being one, so keep the
@@ -60,6 +70,24 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 mcp = _Server("sleeper")
+
+# Tool annotations: what a client reads to decide when to ask the user before
+# a call. Every tool reaches Sleeper, so every tool is open-world. A write's
+# hints describe the call with confirm=True; the default dry run changes
+# nothing, but the hint has to cover the worst case of the call, not the usual
+# one. tests/test_annotations.py fails on a tool registered without them.
+READ = ToolAnnotations(readOnlyHint=True, openWorldHint=True)
+
+
+def write(*, destructive: bool, idempotent: bool) -> ToolAnnotations:
+    """Hints for a tool that changes state.
+
+    destructive: it can remove or overwrite something (a starter, a rostered
+        player, a pick), not only add.
+    idempotent: the same call twice leaves the same state as once.
+    """
+    return ToolAnnotations(readOnlyHint=False, destructiveHint=destructive,
+                           idempotentHint=idempotent, openWorldHint=True)
 
 GQL = "https://sleeper.com/graphql"
 REST = "https://api.sleeper.app/v1"
@@ -244,7 +272,12 @@ async def players() -> dict:
     for the slot they are assigned to". Resolve against a ROSTER where possible,
     and always prefer ids.
     """
-    return await _cached("players", "players", lambda: rest("/players/nfl"))
+    async def load() -> dict:
+        # Sleeper gives a team defence no full_name; without one no tool can
+        # find it by name. See lookup.fill_defense_names.
+        return fill_defense_names(await rest("/players/nfl"))
+
+    return await _cached("players", "players", load)
 
 
 async def league(lg: str | None = None) -> dict:

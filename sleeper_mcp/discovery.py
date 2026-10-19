@@ -10,10 +10,11 @@ import datetime as dt
 
 from . import config as _config
 from .client import (DEFAULT_LEAGUE, DEFAULT_ROSTER, TOKEN, WRITES_ENABLED,
-                     AuthError, gql, mcp, rest)
+                     AuthError, gql, READ, mcp, rest,
+                     write)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 async def find_my_leagues(username: str, season: str = "") -> str:
     """Look up your Sleeper user id, your leagues, and your roster id in each.
 
@@ -66,7 +67,7 @@ async def find_my_leagues(username: str, season: str = "") -> str:
     return "\n".join(out)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 async def league_info(league_id: str = "") -> str:
     """League settings that change how everything else should be read.
 
@@ -125,7 +126,7 @@ async def league_info(league_id: str = "") -> str:
     return "\n".join(out)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 async def auth_status() -> str:
     """Where each setting came from and whether the token actually works.
 
@@ -163,7 +164,7 @@ async def auth_status() -> str:
     return "\n".join(out)
 
 
-@mcp.tool()
+@mcp.tool(annotations=write(destructive=True, idempotent=False))
 async def setup_token(enable_writes: bool = False) -> str:
     """Start a one-time local page for adding your Sleeper token SAFELY.
 
