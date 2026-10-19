@@ -49,17 +49,18 @@ from .lookup import fill_defense_names
 # Prefer the v2 name: a v1 install has no MCPServer, so the fallback is the
 # one that fires, and new installs get the current class without a deprecation
 # path to maintain.
+#
+# mcp 2.0 also moved the protocol types into their own package. ToolAnnotations
+# is the only one this server builds itself. Both imports hang off the SAME
+# test, the server class: a downgrade from 2.x can leave mcp_types installed
+# beside mcp 1.x, and probing mcp_types on its own would then mix the two.
+# annotations= on @tool() arrived in mcp 1.7.0, hence the floor in
+# pyproject.toml.
 try:                                    # mcp >= 2
     from mcp.server import MCPServer as _Server
-except ImportError:                     # mcp 1.x
-    from mcp.server import FastMCP as _Server
-
-# mcp 2.0 also moved the protocol types into their own package. ToolAnnotations
-# is the only one this server builds itself. annotations= on @tool() arrived in
-# mcp 1.7.0, which is why that is the floor in pyproject.toml.
-try:                                    # mcp >= 2
     from mcp_types import ToolAnnotations
 except ImportError:                     # mcp 1.x
+    from mcp.server import FastMCP as _Server
     from mcp.types import ToolAnnotations
 
 # httpx logs full request URLs at INFO. Nothing here puts a secret in a URL,
