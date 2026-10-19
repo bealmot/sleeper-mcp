@@ -54,6 +54,14 @@ try:                                    # mcp >= 2
 except ImportError:                     # mcp 1.x
     from mcp.server import FastMCP as _Server
 
+# mcp 2.0 also moved the protocol types into their own package. ToolAnnotations
+# is the only one this server builds itself. annotations= on @tool() arrived in
+# mcp 1.7.0, which is why that is the floor in pyproject.toml.
+try:                                    # mcp >= 2
+    from mcp_types import ToolAnnotations
+except ImportError:                     # mcp 1.x
+    from mcp.types import ToolAnnotations
+
 # httpx logs full request URLs at INFO. Nothing here puts a secret in a URL,
 # but a token in a header is one refactor away from being one, so keep the
 # request log quiet by default.
@@ -61,6 +69,24 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 mcp = _Server("sleeper")
+
+# Tool annotations: what a client reads to decide when to ask the user before
+# a call. Every tool reaches Sleeper, so every tool is open-world. A write's
+# hints describe the call with confirm=True; the default dry run changes
+# nothing, but the hint has to cover the worst case of the call, not the usual
+# one. tests/test_annotations.py fails on a tool registered without them.
+READ = ToolAnnotations(readOnlyHint=True, openWorldHint=True)
+
+
+def write(*, destructive: bool, idempotent: bool) -> ToolAnnotations:
+    """Hints for a tool that changes state.
+
+    destructive: it can remove or overwrite something (a starter, a rostered
+        player, a pick), not only add.
+    idempotent: the same call twice leaves the same state as once.
+    """
+    return ToolAnnotations(readOnlyHint=False, destructiveHint=destructive,
+                           idempotentHint=idempotent, openWorldHint=True)
 
 GQL = "https://sleeper.com/graphql"
 REST = "https://api.sleeper.app/v1"

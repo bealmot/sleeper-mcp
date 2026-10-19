@@ -26,9 +26,10 @@ from __future__ import annotations
 import asyncio
 import json
 
-from .client import (ConfigError, cache_clear, gql, league, league_id, mcp,
+from .client import (ConfigError, cache_clear, gql, league, league_id, READ, mcp,
                      owners,
-                     players, require_writes, rest, roster_id)
+                     players, require_writes, rest, roster_id,
+                     write)
 from .lookup import ambiguous, find_player
 
 # Sleeper hands `keepers` BACK as a list and takes it IN as a String. The
@@ -105,7 +106,7 @@ async def _kept_in_draft(lg_cfg: dict, P: dict, owner: dict) -> list[tuple]:
     return sorted(out)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 async def keepers(history: bool = True, league_id_: str = "") -> str:
     """Who was kept, who is designated to be kept, and the league's rules.
 
@@ -180,7 +181,7 @@ async def keepers(history: bool = True, league_id_: str = "") -> str:
     return "\n".join(out)
 
 
-@mcp.tool()
+@mcp.tool(annotations=write(destructive=True, idempotent=True))
 async def set_keepers(player_names: list[str], confirm: bool = False,
                       league_id_: str = "", roster_id_: int = 0) -> str:
     """WRITE. Designate which of your players you are keeping.

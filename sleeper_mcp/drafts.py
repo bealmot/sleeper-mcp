@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 
-from .client import gql, league, league_id, mcp, owners, players, rest
+from .client import gql, league, league_id, READ, mcp, owners, players, rest
 from .picks import by_roster, value
 
 
@@ -43,7 +43,7 @@ async def _draft_picks(cfg: dict) -> list[dict]:
              "is_keeper": p.get("is_keeper")} for p in picks]
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 async def draft_board(season: str = "", round_: int = 0,
                       league_id_: str = "") -> str:
     """The draft as it happened, with keepers marked.
@@ -82,7 +82,7 @@ async def draft_board(season: str = "", round_: int = 0,
     return "\n".join(out)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 async def draft_review(season: str = "", limit: int = 10,
                        league_id_: str = "") -> str:
     """What each pick actually returned, scored against where it was taken.
@@ -173,7 +173,7 @@ async def draft_review(season: str = "", limit: int = 10,
     return "\n".join(out)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ)
 async def traded_picks(season: str = "", league_id_: str = "") -> str:
     """Future draft picks that are not with the team they belong to.
 

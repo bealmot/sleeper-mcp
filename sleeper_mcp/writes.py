@@ -25,7 +25,8 @@ from __future__ import annotations
 
 from .client import (ConfigError, cache_clear, current_week, gql,
                      league_id, mcp, players, require_writes, rest,
-                     roster_id, starting_slots)
+                     roster_id, starting_slots,
+                     write)
 
 
 async def _my(lg: str, rid: int) -> dict:
@@ -59,7 +60,7 @@ def _resolve(P: dict, names: list[str], pool: set, label: str):
     return got, bad
 
 
-@mcp.tool()
+@mcp.tool(annotations=write(destructive=True, idempotent=True))
 async def set_lineup(players_in_slot_order: list[str], league_id_: str = "",
                      roster_id_: int = 0, week: int = 0,
                      confirm: bool = False) -> str:
@@ -139,7 +140,7 @@ async def set_lineup(players_in_slot_order: list[str], league_id_: str = "",
             + ("" if ok else f"\n\n  sent {ids}\n  got  {live}"))
 
 
-@mcp.tool()
+@mcp.tool(annotations=write(destructive=True, idempotent=False))
 async def waiver_claim(add_player: str, drop_player: str, bid: int = 0,
                        league_id_: str = "", roster_id_: int = 0,
                        confirm: bool = False) -> str:
@@ -190,7 +191,7 @@ async def waiver_claim(add_player: str, drop_player: str, bid: int = 0,
             f"{plan}\n\n  Check `pending` to see it queued.")
 
 
-@mcp.tool()
+@mcp.tool(annotations=write(destructive=True, idempotent=True))
 async def cancel_claim(transaction_id: str, leg: int = 0,
                        league_id_: str = "", confirm: bool = False) -> str:
     """WRITE. Withdraw one of your pending waiver claims.
@@ -211,7 +212,7 @@ async def cancel_claim(transaction_id: str, leg: int = 0,
     return f"Cancelled {transaction_id}. Check `pending` to confirm."
 
 
-@mcp.tool()
+@mcp.tool(annotations=write(destructive=True, idempotent=True))
 async def set_ir(player_names: list[str], league_id_: str = "",
                  roster_id_: int = 0, confirm: bool = False) -> str:
     """WRITE. Set which players occupy your IR slots.
@@ -255,7 +256,7 @@ async def set_ir(player_names: list[str], league_id_: str = "",
                              "mismatch."))
 
 
-@mcp.tool()
+@mcp.tool(annotations=write(destructive=True, idempotent=True))
 async def trade_block(add: list[str] | None = None,
                       remove: list[str] | None = None,
                       league_id_: str = "", roster_id_: int = 0,
@@ -300,7 +301,7 @@ async def trade_block(add: list[str] | None = None,
     return f"Applied.\n{plan}"
 
 
-@mcp.tool()
+@mcp.tool(annotations=write(destructive=False, idempotent=False))
 async def propose_trade(give_players: list[str], receive_players: list[str],
                         with_manager: str, faab: int = 0,
                         league_id_: str = "", roster_id_: int = 0,
@@ -365,7 +366,7 @@ async def propose_trade(give_players: list[str], receive_players: list[str],
     return f"SENT — {d.get('propose_trade') or 'no body'}\n{plan}"
 
 
-@mcp.tool()
+@mcp.tool(annotations=write(destructive=True, idempotent=False))
 async def respond_trade(transaction_id: str, response: str, leg: int = 0,
                         league_id_: str = "", confirm: bool = False) -> str:
     """WRITE. Accept or reject a trade offered to you.
@@ -395,7 +396,7 @@ async def respond_trade(transaction_id: str, response: str, leg: int = 0,
     return f"{resp.upper()}ED {transaction_id}. Check `pending` to confirm."
 
 
-@mcp.tool()
+@mcp.tool(annotations=write(destructive=True, idempotent=True))
 async def pickem_pick(game_id: str, team: str, week: int = 0,
                       pickem_league: str = "", pickem_roster: int = 0,
                       confirm: bool = False) -> str:
@@ -459,7 +460,7 @@ async def pickem_pick(game_id: str, team: str, week: int = 0,
             f"{now.get('team')}{was}.")
 
 
-@mcp.tool()
+@mcp.tool(annotations=write(destructive=True, idempotent=True))
 async def pickem_tiebreaker(total_points: int, game_id: str = "",
                             week: int = 0, pickem_league: str = "",
                             pickem_roster: int = 0,
@@ -539,7 +540,7 @@ async def pickem_tiebreaker(total_points: int, game_id: str = "",
             f"{now.get('value')} on game {now.get('game_id')}{was}.")
 
 
-@mcp.tool()
+@mcp.tool(annotations=write(destructive=True, idempotent=True))
 async def watch_player(player_name: str, unwatch: bool = False) -> str:
     """WRITE. Add or remove a player from your Sleeper watchlist.
 
