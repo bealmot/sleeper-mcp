@@ -525,3 +525,69 @@ async def test_waiver_claim_shows_the_defence_being_dropped_by_name(sleeper):
     out = await call(waiver_claim, add_player="Fox Catcher",
                      drop_player="Aardvarks")
     assert "DROP  Anytown Aardvarks" in out, out
+
+
+# --- projected first downs ---------------------------------------------------
+#
+# Sleeper projects every first down as yards / 10, about 2.4x the real rate.
+# These rows carry that stub, as the real feed does, in a league that pays 0.5
+# per receiving first down. Each row scores 13.00 before first downs: 4 catches
+# at 0.5, 50 yards at 0.1, a touchdown at 6. The stub adds 2.50 (15.50); 50
+# yards at the receiver rate of 0.0415 adds 1.04 (14.04).
+
+STUB_PROJ = {
+    "wr1": {"rec": 4.0, "rec_yd": 50.0, "rec_fd": 5.0, "rec_td": 1.0},
+    "wr2": {"rec": 2.0, "rec_yd": 20.0, "rec_fd": 2.0},
+    "wr3": {"rec": 4.0, "rec_yd": 50.0, "rec_fd": 5.0, "rec_td": 1.0},
+}
+
+
+@pytest.fixture
+def fd_league(sleeper, monkeypatch):
+    monkeypatch.setitem(sleeper.LEAGUE_CFG["scoring_settings"], "rec_fd", 0.5)
+
+    async def gql(query, variables=None, auth=False):
+        if "stats_for_players_in_week" in query and 'category:"proj"' in query:
+            return {"stats_for_players_in_week": [
+                {"player_id": p, "stats": dict(s)}
+                for p, s in STUB_PROJ.items() if f'"{p}"' in query]}
+        return await sleeper.gql(query, variables, auth)
+
+    for mod in ("reads", "lineups", "signals"):
+        monkeypatch.setattr(f"sleeper_mcp.{mod}.gql", gql)
+    return sleeper
+
+
+@pytest.mark.asyncio
+async def test_roster_does_not_score_the_first_down_stub(fd_league):
+    from sleeper_mcp.reads import roster
+    out = await call(roster)
+    assert "14.04" in out and "15.50" not in out
+    assert "first down" in out.lower()
+
+
+@pytest.mark.asyncio
+async def test_waiver_targets_does_not_score_the_first_down_stub(fd_league):
+    from sleeper_mcp.lineups import waiver_targets
+    out = await call(waiver_targets)
+    assert "projects  14.0" in out and "15.5" not in out
+    assert "first down" in out.lower()
+
+
+@pytest.mark.asyncio
+async def test_bye_outlook_does_not_score_the_first_down_stub(fd_league):
+    from sleeper_mcp.lineups import bye_outlook
+    out = await call(bye_outlook, through_week=6)
+    assert "14.0" in out and "15.5" not in out
+
+
+@pytest.mark.asyncio
+async def test_signal_divergence_does_not_score_the_first_down_stub(
+        fd_league, monkeypatch, tmp_path):
+    from sleeper_mcp import signals
+    path = tmp_path / "signal.json"
+    path.write_text('{"source": "t", "players": {"wr1": {"score": 1},'
+                    ' "wr2": {"score": 9}, "wr3": {"score": 5}}}')
+    monkeypatch.setattr(signals, "SIGNAL_FILE", str(path))
+    out = await call(signals.signal_divergence, gap=1)
+    assert "proj  14.0" in out and "15.5" not in out

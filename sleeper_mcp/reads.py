@@ -7,6 +7,7 @@ import datetime as dt
 from .client import (AuthError, ConfigError, current_week, gql, league,
                      league_id, READ, mcp, owners, players, rest, roster_id,
                      scored, state)
+from .firstdowns import fd_from_yards, fd_note
 from .lookup import ambiguous, find_player
 from .season import confidence, team_strength
 
@@ -55,7 +56,8 @@ async def roster(league_id_: str = "", roster_id_: int = 0,
 
     def line(pid, slot=None):
         v = P.get(pid) or {}
-        pts = scored(proj[pid], scoring) if pid in proj else None
+        pts = (scored(fd_from_yards(proj[pid], v.get("position")), scoring)
+               if pid in proj else None)
         inj = f"  [{v['injury_status']}]" if v.get("injury_status") else ""
         return (f"  {slot or v.get('position', '?'):5} "
                 f"{(v.get('full_name') or pid)[:24]:24} "
@@ -74,6 +76,8 @@ async def roster(league_id_: str = "", roster_id_: int = 0,
     out.append("")
     out.append(f"  scored under {lgd.get('name')}'s own settings "
                f"({len(scoring)} scoring keys), not pts_ppr")
+    if note := fd_note(scoring):
+        out.append(note)
     return "\n".join(out)
 
 

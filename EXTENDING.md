@@ -106,7 +106,8 @@ it standalone.
 
 **Score against the league's own settings.** `pts_ppr` is a preset and is wrong
 for half-PPR, first-down, or TE-premium leagues. Use `scored()` with
-`league.scoring_settings`.
+`league.scoring_settings`. Pass a PROJECTION through
+`firstdowns.fd_from_yards()` first: Sleeper projects first downs as yards / 10.
 
 **Read slots from the league.** `roster_positions` varies enormously and
 `set_lineup` is positional. A hardcoded slot array does not error — it silently
