@@ -55,6 +55,7 @@ import os
 
 from .client import (current_week, gql, league, league_id, READ, mcp, players, rest,
                      roster_id, scored)
+from .firstdowns import fd_from_yards
 from .optimizer import percentile_within as _pct_within
 
 SIGNAL_FILE = (os.environ.get("SLEEPER_SIGNAL_FILE") or "").strip()
@@ -142,7 +143,9 @@ async def signal_divergence(min_evidence: int = 1, gap: int = 25,
             % (lgd.get("season"), wk,
                "[" + ",".join(f'"{c}"' for c in chunk) + "]"))
         for r in (d.get("stats_for_players_in_week") or []):
-            proj[r["player_id"]] = scored(r["stats"], scoring)
+            pos = (P.get(r["player_id"]) or {}).get("position")
+            proj[r["player_id"]] = scored(fd_from_yards(r["stats"], pos),
+                                          scoring)
 
     rosters = await rest(f"/league/{lg}/rosters")
     owned = {str(p) for r in rosters for p in (r.get("players") or [])}

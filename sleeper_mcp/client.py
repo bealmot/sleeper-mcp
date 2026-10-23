@@ -441,6 +441,10 @@ def scored(stats: dict, scoring: dict) -> float:
     league that deviates — half-PPR, per-first-down scoring, 6-point passing
     touchdowns, TE premium. `league.scoring_settings` is the league's actual
     rulebook, so weekly value is computed from raw components against it.
+
+    Pass a projection through `firstdowns.fd_from_yards()` first. Sleeper
+    projects every first down as yards / 10, and this dot product would score
+    that stub as faithfully as it scores everything else.
     """
     return round(sum(scoring.get(k, 0) * v for k, v in stats.items()
                      if isinstance(v, (int, float))), 2)

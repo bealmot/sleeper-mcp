@@ -158,7 +158,10 @@ A few worth calling out:
 
 - **`roster`** scores your players against *your league's* `scoring_settings`,
   not Sleeper's generic `pts_ppr`. In half-PPR, first-down-scoring or
-  TE-premium leagues those differ by several points a player.
+  TE-premium leagues those differ by several points a player. Sleeper projects
+  first downs as yards / 10, about 2.4x the real rate, so the projection tools
+  use a measured rate per position instead. Their totals can be lower than
+  the Sleeper app's.
 - **`set_lineup`** reads your league's `roster_positions` at runtime, so
   superflex, 3-WR and no-kicker leagues work without configuration.
 - **`pickem_status`** may be the only way to check a pick'em entry from a
