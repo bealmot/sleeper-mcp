@@ -276,17 +276,42 @@ async def transactions(league_id_: str = "", week: int = 0) -> str:
 async def pending(league_id_: str = "", week: int = 0) -> str:
     """Pending trades and waiver claims, with the ids needed to act on them.
 
-    Sleeper has NO GraphQL query for trades at all, so pending items come from
-    the REST transactions feed. accept_trade, reject_trade and
-    cancel_waiver_claim all need a transaction_id, and this is the only place
-    to get one.
+    accept_trade, reject_trade and cancel_waiver_claim all need a
+    transaction_id, and this is the only place to get one.
+
+    THE PUBLIC REST FEED HIDES YOUR OWN PENDING WAIVER CLAIMS. On 2026-10-23 a
+    claim submitted a minute earlier was absent from REST and present in
+    authenticated GraphQL `league_transactions`, and this tool said "Nothing
+    pending" while it was queued. So with a token, GraphQL is read as well.
+
+    The two are merged by transaction id, because neither is a superset (see
+    `transaction_search`). GraphQL carries trades in every status REST does,
+    but no pending trade existed to prove it carries those, so a pending row
+    only REST holds is kept. Where both hold an id, GraphQL's status wins: REST
+    is Cloudflare-cached and can still say pending after a trade completes.
+
+    Without a token this reads REST alone, and says so in the output.
     """
     lg = league_id(league_id_ or None)
     wk = week or await current_week()
     P, owner = await players(), await owners(lg)
-    tx = await rest(f"/league/{lg}/transactions/{wk}") or []
-    pend = [t for t in tx if t.get("status") == "pending"]
-    out = [f"Pending — week {wk} ({len(pend)})", ""]
+    tx = {t.get("transaction_id"): t
+          for t in (await rest(f"/league/{lg}/transactions/{wk}") or [])}
+    try:
+        d = await gql('{league_transactions(league_id:"%s",leg:%d)'
+                      '{transaction_id status type leg adds drops settings '
+                      'roster_ids}}' % (lg, wk), auth=True)
+        tx.update({t.get("transaction_id"): t
+                   for t in (d.get("league_transactions") or [])})
+        source = "authenticated GraphQL league_transactions, merged with REST"
+    except Exception as e:
+        why = ("no SLEEPER_TOKEN" if isinstance(e, ConfigError)
+               else "Sleeper rejected SLEEPER_TOKEN" if isinstance(e, AuthError)
+               else f"GraphQL failed: {e.__class__.__name__}: {e}")
+        source = (f"public REST only ({why}). REST HIDES YOUR OWN PENDING "
+                  f"WAIVER CLAIMS, so a queued claim does not show here")
+    pend = [t for t in tx.values() if t.get("status") == "pending"]
+    out = [f"Pending — week {wk} ({len(pend)})", f"  source: {source}", ""]
     if not pend:
         out.append("  Nothing pending.")
     for t in pend:

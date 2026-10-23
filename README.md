@@ -120,6 +120,8 @@ that `sleeper-mcp setup` writes (`SLEEPER_MCP_CONFIG` overrides its location).
 
 **Reads need no token at all.** Rosters, matchups, news, standings, trending
 players and transactions all work with nothing configured but a league id.
+One exception is easy to miss: without a token, `pending` cannot see your own
+waiver claims, because Sleeper's public feed hides them.
 
 ## Writes are off by default
 

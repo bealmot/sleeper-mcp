@@ -57,6 +57,68 @@ async def test_transactions_renders(sleeper):
     assert "trade" in (await call(transactions)).lower()
 
 
+def _rest_with_transactions(rows):
+    """fake.rest, except the week's REST transactions are `rows`."""
+    async def rest(path):
+        if "/transactions/" in path:
+            return rows
+        return await fake.rest(path)
+    return rest
+
+
+@pytest.mark.asyncio
+async def test_pending_shows_a_waiver_claim_that_rest_hides(sleeper):
+    """The public REST feed omits your OWN pending waiver claims.
+
+    Seen 2026-10-23: a claim submitted a minute earlier was in authenticated
+    GraphQL `league_transactions` and absent from REST, so `pending` said
+    "Nothing pending" and cancel_claim had no transaction_id to work from.
+    """
+    from sleeper_mcp.reads import pending
+    out = await call(pending)
+    assert "id=w9" in out and "Fox Catcher" in out and "$1" in out
+    assert "GraphQL" in out
+
+
+@pytest.mark.asyncio
+async def test_pending_without_a_token_says_rest_hides_claims(sleeper,
+                                                              monkeypatch):
+    from sleeper_mcp import reads
+    from sleeper_mcp.client import ConfigError
+
+    async def no_token(*a, **kw):
+        raise ConfigError("SLEEPER_TOKEN is not set")
+    monkeypatch.setattr(reads, "gql", no_token)
+    out = await call(reads.pending)
+    assert "REST" in out and "HIDES" in out and "SLEEPER_TOKEN" in out
+    assert "id=w9" not in out
+
+
+@pytest.mark.asyncio
+async def test_pending_keeps_a_rest_row_that_graphql_lacks(sleeper,
+                                                           monkeypatch):
+    """No pending trade existed in either source when this was written, so it
+    is unproven that GraphQL carries one. The merge keeps what REST shows."""
+    from sleeper_mcp import reads
+    offer = {**fake.TRANSACTIONS[0], "transaction_id": "t7",
+             "status": "pending"}
+    monkeypatch.setattr(reads, "rest", _rest_with_transactions([offer]))
+    out = await call(reads.pending)
+    assert "id=t7" in out and "id=w9" in out
+
+
+@pytest.mark.asyncio
+async def test_pending_trusts_graphql_over_a_stale_rest_status(sleeper,
+                                                               monkeypatch):
+    """REST is Cloudflare-cached: it can still say pending after a trade
+    completes. GraphQL says t1 is complete, so t1 must not show."""
+    from sleeper_mcp import reads
+    stale = {**fake.TRANSACTIONS[0], "status": "pending"}
+    monkeypatch.setattr(reads, "rest", _rest_with_transactions([stale]))
+    out = await call(reads.pending)
+    assert "id=t1" not in out
+
+
 @pytest.mark.asyncio
 async def test_a_trade_does_not_list_each_player_twice(sleeper):
     """A trade puts every player in BOTH adds and drops. Printing the lists

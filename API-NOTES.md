@@ -252,6 +252,15 @@ The gap matters because it changes what the data means. That league proposed
 36 trades and completed 4; a completed-only list contains the four and cannot
 distinguish a quiet league from one where nobody accepts.
 
+**REST also hides your own PENDING WAIVER CLAIMS.** Measured 2026-10-23: two
+claims queued minutes earlier were absent from REST `/transactions/<leg>`, also
+with a cache-busting query, and present in `league_transactions(league_id,
+leg)` with `status: "pending"` and the bid in `settings.waiver_bid`. That query
+also takes `status`, `type`, `roster_id` and `limit`, and answers
+`Unauthorized` without a token. Over legs 1-7 it held every trade REST held,
+plus the cancelled and rejected ones. Whether it holds a PENDING trade was not
+observable, because none existed, so `pending` reads both and merges by id.
+
 **A trade puts every player in BOTH `adds` and `drops`,** since he moves
 between rosters. Printing the two lists separately shows each player twice,
 once arriving and once leaving. Group by destination instead.

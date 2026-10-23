@@ -123,6 +123,15 @@ TRANSACTIONS = [
      "waiver_budget": None},
 ]
 
+# YOUR OWN PENDING WAIVER CLAIM. Only authenticated GraphQL
+# `league_transactions` returns it; the public REST feed omits it, so it is
+# deliberately NOT in TRANSACTIONS. Shaped like the real row of 2026-10-23:
+# no draft_picks, no waiver_budget, and the bid inside `settings`.
+PENDING_CLAIM = {"transaction_id": "w9", "type": "waiver", "status": "pending",
+                 "leg": 5, "created": 1757272300000, "roster_ids": [1],
+                 "adds": {"wr3": 1}, "drops": {"k1": 1},
+                 "settings": {"waiver_bid": 1}}
+
 STATS = {
     "wr1": {"rec_tgt": 30.0, "rec": 20.0, "rec_yd": 250.0, "off_snp": 200.0,
             "tm_off_snp": 300.0, "pts_half_ppr": 60.0, "gp": 4.0,
@@ -227,6 +236,9 @@ async def gql(query: str, variables=None, auth: bool = False):
         return {"league_transactions_by_player": TRANSACTIONS}
     if "league_transactions_filtered" in q:
         return {"league_transactions_filtered": TRANSACTIONS}
+    if "league_transactions(" in q:
+        _needs_token("league_transactions", auth)
+        return {"league_transactions": TRANSACTIONS + [PENDING_CLAIM]}
     if "roster_draft_picks" in q:
         return {"roster_draft_picks": [
             {"season": "2027", "round": 6, "roster_id": 2, "owner_id": 1,
