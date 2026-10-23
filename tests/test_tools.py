@@ -120,6 +120,24 @@ async def test_pending_trusts_graphql_over_a_stale_rest_status(sleeper,
 
 
 @pytest.mark.asyncio
+async def test_pending_sends_the_league_id_as_a_variable(sleeper, monkeypatch):
+    """The query is authenticated and the league id is caller input. Spliced
+    into the query text, a crafted id could add fields to a query that runs
+    with the user's token."""
+    from sleeper_mcp import reads
+    sent = []
+
+    async def spy(query, variables=None, auth=False):
+        sent.append((query, variables))
+        return await fake.gql(query, variables, auth)
+    monkeypatch.setattr(reads, "gql", spy)
+    await call(reads.pending)
+    query, variables = sent[0]
+    assert fake.LEAGUE not in query
+    assert variables == {"lg": fake.LEAGUE, "leg": 5}
+
+
+@pytest.mark.asyncio
 async def test_a_trade_does_not_list_each_player_twice(sleeper):
     """A trade puts every player in BOTH adds and drops. Printing the lists
     separately showed each one arriving and leaving."""

@@ -298,9 +298,12 @@ async def pending(league_id_: str = "", week: int = 0) -> str:
     tx = {t.get("transaction_id"): t
           for t in (await rest(f"/league/{lg}/transactions/{wk}") or [])}
     try:
-        d = await gql('{league_transactions(league_id:"%s",leg:%d)'
-                      '{transaction_id status type leg adds drops settings '
-                      'roster_ids}}' % (lg, wk), auth=True)
+        # Variables, not splicing: this runs with the user's token and the
+        # league id is caller input.
+        d = await gql("query($lg:Snowflake!,$leg:Int!){"
+                      "league_transactions(league_id:$lg,leg:$leg)"
+                      "{transaction_id status type leg adds drops settings "
+                      "roster_ids}}", {"lg": lg, "leg": wk}, auth=True)
         tx.update({t.get("transaction_id"): t
                    for t in (d.get("league_transactions") or [])})
         source = "authenticated GraphQL league_transactions, merged with REST"
