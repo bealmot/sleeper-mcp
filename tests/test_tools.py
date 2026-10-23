@@ -11,6 +11,8 @@ every formatting change and teach people to update the expectation without
 reading it.
 """
 
+import json
+
 import pytest
 
 pytest.importorskip("httpx")
@@ -525,3 +527,65 @@ async def test_waiver_claim_shows_the_defence_being_dropped_by_name(sleeper):
     out = await call(waiver_claim, add_player="Fox Catcher",
                      drop_player="Aardvarks")
     assert "DROP  Anytown Aardvarks" in out, out
+
+
+# --- trade_targets ----------------------------------------------------------
+
+# The rival (roster 2) starts wr2 and benches rb2 and wr4. rb2's team plays
+# this week. wr4's team DDD is not on the fake scoreboard, so he is on a BYE:
+# his owner could not start him, and the bench says nothing about his price.
+# Both rate in the top quarter of the signal at their position. On 2026-10-23
+# six of the twelve BUY LOW rows were bye benches like wr4.
+_RIVAL = {"roster_id": 2, "owner_id": "u2", "players": ["rb2", "wr2", "wr4"],
+          "starters": ["wr2"], "reserve": []}
+_SIGNAL = {"source": "test signal", "players": {
+    "rb1": {"score": 1}, "rb3": {"score": 2}, "rb2": {"score": 9},
+    "wr1": {"score": 1}, "wr3": {"score": 2}, "wr2": {"score": 3},
+    "wr4": {"score": 10}}}
+
+
+def _section(out: str, title: str) -> str:
+    """The block that starts at a heading, up to the next blank line."""
+    start = out.index(title)
+    end = out.find("\n\n", start)
+    return out[start:] if end < 0 else out[start:end]
+
+
+@pytest.fixture
+def rival_benches(sleeper, monkeypatch, tmp_path):
+    from sleeper_mcp import signals
+    f = tmp_path / "signal.json"
+    f.write_text(json.dumps(_SIGNAL))
+    monkeypatch.setattr(signals, "SIGNAL_FILE", str(f))
+    monkeypatch.setattr(sleeper, "PLAYERS", {**sleeper.PLAYERS, "wr4": {
+        "full_name": "Kit Catcher", "position": "WR", "team": "DDD"}})
+    monkeypatch.setattr(sleeper, "ROSTERS", [sleeper.ROSTERS[0], _RIVAL])
+    return sleeper
+
+
+@pytest.mark.asyncio
+async def test_a_bye_week_bench_is_not_a_buy_low(rival_benches):
+    from sleeper_mcp.signals import trade_targets
+    out = await call(trade_targets)
+    assert "Cat Runner" in _section(out, "BUY LOW"), out
+    assert "Kit Catcher" not in _section(out, "BUY LOW"), out
+    assert "Kit Catcher" in _section(out, "BENCHED ON BYE"), out
+
+
+@pytest.mark.asyncio
+async def test_an_empty_scoreboard_says_the_bye_check_did_not_run(
+        rival_benches, monkeypatch):
+    """No games is no evidence. It must not pass as 'nobody is on a bye'."""
+    from sleeper_mcp import client
+    from sleeper_mcp.signals import trade_targets
+    real = client.gql
+
+    async def no_games(q, *a, **kw):
+        if "scores(sport" in q:
+            return {"scores": []}
+        return await real(q, *a, **kw)
+
+    monkeypatch.setattr(client, "gql", no_games)
+    out = await call(trade_targets)
+    assert "Kit Catcher" in _section(out, "BUY LOW"), out
+    assert "BYE CHECK NOT RUN" in out, out

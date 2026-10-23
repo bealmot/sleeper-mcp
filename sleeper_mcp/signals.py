@@ -54,7 +54,7 @@ import json
 import os
 
 from .client import (current_week, gql, league, league_id, READ, mcp, players, rest,
-                     roster_id, scored)
+                     roster_id, scored, teams_playing)
 from .optimizer import percentile_within as _pct_within
 
 SIGNAL_FILE = (os.environ.get("SLEEPER_SIGNAL_FILE") or "").strip()
@@ -247,6 +247,11 @@ async def trade_targets(min_evidence: int = 1, limit: int = 12,
     being wrong, and conflating the two dresses up the most obvious fact in the
     league as an edge.
 
+    A player benched in his team's BYE week is listed separately for the same
+    reason: he could not start, so the bench says nothing about his price. The
+    byes come from the week's scoreboard. If the scoreboard has no games, the
+    output says that the bye check did not run.
+
     Early-season caution: a week-1 bench reflects draft-day opinion, not
     anything observed. This gets meaningful once managers have seen their teams
     play.
@@ -280,7 +285,12 @@ async def trade_targets(min_evidence: int = 1, limit: int = 12,
         if len(group) >= 3:
             pct.update(_pct_within(group))
 
-    buy, sell, hurt = [], [], []
+    # A bench is revealed preference only if the player COULD start. On
+    # 2026-10-23 (week 7) six of twelve BUY LOW rows were bye benches.
+    wk = await current_week()
+    playing = await teams_playing(wk)
+
+    buy, sell, hurt, bye = [], [], [], []
     for r in rosters:
         rid = r["roster_id"]
         if rid == mine_rid:
@@ -295,14 +305,20 @@ async def trade_targets(min_evidence: int = 1, limit: int = 12,
             row = (p, v.get("position"), v.get("full_name") or pid,
                    v.get("team"), owner.get(rid, "?"), sig[pid], inj)
             if pid not in starters and p >= 75:
-                (hurt if inj in ("OUT", "DOUBTFUL", "IR", "PUP", "SUS", "NA")
-                 else buy).append(row)
+                # The injury wins over the bye: it outlasts the week.
+                if inj in ("OUT", "DOUBTFUL", "IR", "PUP", "SUS", "NA"):
+                    hurt.append(row)
+                elif playing and v.get("team") and v["team"] not in playing:
+                    bye.append(row)
+                else:
+                    buy.append(row)
             elif pid in starters and p <= 25:
                 sell.append(row)
 
     buy.sort(key=lambda r: -r[0])
     sell.sort(key=lambda r: r[0])
     hurt.sort(key=lambda r: -r[0])
+    bye.sort(key=lambda r: -r[0])
 
     def block(rows, verb):
         lines = []
@@ -319,9 +335,21 @@ async def trade_targets(min_evidence: int = 1, limit: int = 12,
     out += ["", f"BENCHED BUT INJURED ({len(hurt)}) — the injury explains the "
             f"bench, so this is NOT evidence of mispricing"]
     out += block(hurt, "held by")
+    out += ["", f"BENCHED ON BYE ({len(bye)}) — his team has no game in week "
+            f"{wk}, so he could not start: NOT evidence of mispricing"]
+    out += block(bye, "held by")
     out += ["", f"SELL HIGH ({len(sell)}) — STARTING someone your signal rates low"]
     out += block(sell, "started by")
     out += ["", "  Percentages are your signal's percentile within position.",
             "  A rival's lineup is his valuation, published weekly for free. "
             "This checks it against a source he does not have."]
+    if playing:
+        on_roster = {(P.get(str(x)) or {}).get("team")
+                     for r in rosters for x in (r.get("players") or [])}
+        out.append(f"  Week {wk} byes: "
+                   f"{', '.join(sorted(on_roster - playing - {None})) or 'none'}"
+                   f". A bye bench is forced, so it is kept out of BUY LOW.")
+    else:
+        out.append(f"  BYE CHECK NOT RUN: the week {wk} scoreboard has no "
+                   f"games, so a bye-week bench can still be listed as BUY LOW.")
     return "\n".join(out)
