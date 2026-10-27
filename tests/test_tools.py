@@ -57,6 +57,86 @@ async def test_transactions_renders(sleeper):
     assert "trade" in (await call(transactions)).lower()
 
 
+def _rest_with_transactions(rows):
+    """fake.rest, except the week's REST transactions are `rows`."""
+    async def rest(path):
+        if "/transactions/" in path:
+            return rows
+        return await fake.rest(path)
+    return rest
+
+
+@pytest.mark.asyncio
+async def test_pending_shows_a_waiver_claim_that_rest_hides(sleeper):
+    """The public REST feed omits your OWN pending waiver claims.
+
+    Seen 2026-10-23: a claim submitted a minute earlier was in authenticated
+    GraphQL `league_transactions` and absent from REST, so `pending` said
+    "Nothing pending" and cancel_claim had no transaction_id to work from.
+    """
+    from sleeper_mcp.reads import pending
+    out = await call(pending)
+    assert "id=w9" in out and "Fox Catcher" in out and "$1" in out
+    assert "GraphQL" in out
+
+
+@pytest.mark.asyncio
+async def test_pending_without_a_token_says_rest_hides_claims(sleeper,
+                                                              monkeypatch):
+    from sleeper_mcp import reads
+    from sleeper_mcp.client import ConfigError
+
+    async def no_token(*a, **kw):
+        raise ConfigError("SLEEPER_TOKEN is not set")
+    monkeypatch.setattr(reads, "gql", no_token)
+    out = await call(reads.pending)
+    assert "REST" in out and "HIDES" in out and "SLEEPER_TOKEN" in out
+    assert "id=w9" not in out
+
+
+@pytest.mark.asyncio
+async def test_pending_keeps_a_rest_row_that_graphql_lacks(sleeper,
+                                                           monkeypatch):
+    """No pending trade existed in either source when this was written, so it
+    is unproven that GraphQL carries one. The merge keeps what REST shows."""
+    from sleeper_mcp import reads
+    offer = {**fake.TRANSACTIONS[0], "transaction_id": "t7",
+             "status": "pending"}
+    monkeypatch.setattr(reads, "rest", _rest_with_transactions([offer]))
+    out = await call(reads.pending)
+    assert "id=t7" in out and "id=w9" in out
+
+
+@pytest.mark.asyncio
+async def test_pending_trusts_graphql_over_a_stale_rest_status(sleeper,
+                                                               monkeypatch):
+    """REST is Cloudflare-cached: it can still say pending after a trade
+    completes. GraphQL says t1 is complete, so t1 must not show."""
+    from sleeper_mcp import reads
+    stale = {**fake.TRANSACTIONS[0], "status": "pending"}
+    monkeypatch.setattr(reads, "rest", _rest_with_transactions([stale]))
+    out = await call(reads.pending)
+    assert "id=t1" not in out
+
+
+@pytest.mark.asyncio
+async def test_pending_sends_the_league_id_as_a_variable(sleeper, monkeypatch):
+    """The query is authenticated and the league id is caller input. Spliced
+    into the query text, a crafted id could add fields to a query that runs
+    with the user's token."""
+    from sleeper_mcp import reads
+    sent = []
+
+    async def spy(query, variables=None, auth=False):
+        sent.append((query, variables))
+        return await fake.gql(query, variables, auth)
+    monkeypatch.setattr(reads, "gql", spy)
+    await call(reads.pending)
+    query, variables = sent[0]
+    assert fake.LEAGUE not in query
+    assert variables == {"lg": fake.LEAGUE, "leg": 5}
+
+
 @pytest.mark.asyncio
 async def test_a_trade_does_not_list_each_player_twice(sleeper):
     """A trade puts every player in BOTH adds and drops. Printing the lists
@@ -591,3 +671,27 @@ async def test_signal_divergence_does_not_score_the_first_down_stub(
     monkeypatch.setattr(signals, "SIGNAL_FILE", str(path))
     out = await call(signals.signal_divergence, gap=1)
     assert "proj  14.0" in out and "15.5" not in out
+
+
+# --- reception scoring -------------------------------------------------------
+#
+# A catch pays `rec` PLUS a per-position bonus_rec_<pos>. A league can leave
+# rec at 0 and pay the half point through the three bonuses. league_info read
+# rec alone, so it called that league zero-PPR, and it named an equal TE bonus
+# a "TE premium". The last two rows are the controls: a real TE premium must
+# still be named, and a league with no reception points must still say so.
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scoring, style, premium", [
+    ({"rec": 0.0, "bonus_rec_wr": 0.5, "bonus_rec_rb": 0.5,
+      "bonus_rec_te": 0.5}, "half-PPR", False),
+    ({"rec": 1.0, "bonus_rec_te": 0.5}, "PPR", True),
+    ({"rec": 0.0}, "zero-PPR", False),
+])
+async def test_league_info_reads_the_reception_bonuses(
+        sleeper, monkeypatch, scoring, style, premium):
+    from sleeper_mcp.discovery import league_info
+    monkeypatch.setitem(sleeper.LEAGUE_CFG, "scoring_settings", scoring)
+    out = await call(league_info)
+    assert f"this is a {style} league" in out, out
+    assert ("TE premium" in out) is premium, out

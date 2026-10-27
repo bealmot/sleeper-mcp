@@ -109,17 +109,31 @@ async def league_info(league_id: str = "") -> str:
            ""]
 
     # Surface the scoring rules most likely to make a naive reading wrong.
-    notable = [("rec", "per reception"), ("rec_fd", "per receiving first down"),
+    # A catch pays `rec` PLUS a per-position bonus_rec_<pos>. A league can
+    # leave rec at 0 and pay the whole point through the bonuses, so reading
+    # rec alone calls a half-PPR league zero-PPR.
+    rec = sc.get("rec", 0)
+    catch = {p: rec + sc.get(f"bonus_rec_{p}", 0) for p in ("rb", "wr", "te")}
+    notable = [("rec_fd", "per receiving first down"),
                ("rush_fd", "per rushing first down"),
-               ("pass_td", "per passing TD"), ("bonus_rec_te", "TE premium")]
+               ("pass_td", "per passing TD")]
     out.append("  scoring worth knowing")
+    out.append(f"    {'per reception':28} "
+               + "  ".join(f"{p.upper()} {v:g}" for p, v in catch.items())
+               + (f"   (rec {rec:g} + bonus_rec_<pos>)"
+                  if any(f"bonus_rec_{p}" in sc for p in catch) else ""))
     for k, label in notable:
         if k in sc:
             out.append(f"    {label:28} {sc[k]}")
-    ppr = sc.get("rec", 0)
+    ppr = max(catch["rb"], catch["wr"])
     style = ("PPR" if ppr >= 1 else "half-PPR" if ppr >= 0.5
-             else "zero-PPR" if ppr == 0 else f"{ppr} per reception")
+             else "zero-PPR" if ppr == 0 else f"{ppr:g} per reception")
     out.append(f"    -> this is a {style} league")
+    # A TE premium is a TE catch worth MORE than a WR or RB catch. An equal
+    # bonus_rec_te is only the league's reception point, paid per position.
+    if catch["te"] > ppr:
+        out.append(f"    -> TE premium: a TE catch pays {catch['te']:g}, "
+                   f"a WR or RB catch {ppr:g}")
     if sc.get("rec_fd") or sc.get("rush_fd"):
         out.append("    -> it also pays FIRST DOWNS, which most rankings and "
                    "projections do not account for")
