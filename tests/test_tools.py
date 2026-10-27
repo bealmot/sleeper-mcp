@@ -756,3 +756,27 @@ async def test_signal_divergence_does_not_score_the_first_down_stub(
     monkeypatch.setattr(signals, "SIGNAL_FILE", str(path))
     out = await call(signals.signal_divergence, gap=1)
     assert "proj  14.0" in out and "15.5" not in out
+
+
+# --- reception scoring -------------------------------------------------------
+#
+# A catch pays `rec` PLUS a per-position bonus_rec_<pos>. A league can leave
+# rec at 0 and pay the half point through the three bonuses. league_info read
+# rec alone, so it called that league zero-PPR, and it named an equal TE bonus
+# a "TE premium". The last two rows are the controls: a real TE premium must
+# still be named, and a league with no reception points must still say so.
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scoring, style, premium", [
+    ({"rec": 0.0, "bonus_rec_wr": 0.5, "bonus_rec_rb": 0.5,
+      "bonus_rec_te": 0.5}, "half-PPR", False),
+    ({"rec": 1.0, "bonus_rec_te": 0.5}, "PPR", True),
+    ({"rec": 0.0}, "zero-PPR", False),
+])
+async def test_league_info_reads_the_reception_bonuses(
+        sleeper, monkeypatch, scoring, style, premium):
+    from sleeper_mcp.discovery import league_info
+    monkeypatch.setitem(sleeper.LEAGUE_CFG, "scoring_settings", scoring)
+    out = await call(league_info)
+    assert f"this is a {style} league" in out, out
+    assert ("TE premium" in out) is premium, out
