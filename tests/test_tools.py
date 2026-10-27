@@ -137,6 +137,90 @@ async def test_pending_sends_the_league_id_as_a_variable(sleeper, monkeypatch):
     assert variables == {"lg": fake.LEAGUE, "leg": 5}
 
 
+# THE QUERIES NO OTHER TEST SENT. Each one spliced caller input into its text,
+# and the conftest guard checks only the queries a test sends.
+
+@pytest.mark.asyncio
+async def test_transaction_search_sends_every_filter(sleeper):
+    """Each filter is an argument only when set, so the query text is built.
+    The values must still reach Sleeper, as variables."""
+    from sleeper_mcp.reads import transaction_search
+    await call(transaction_search, kind="trade", status="complete", week=3,
+               manager="Alder")
+    (_, variables), = [s for s in sleeper.SENT
+                       if "league_transactions_filtered" in s[0]]
+    for want in (["trade"], ["complete"], [3], [1]):
+        assert want in variables.values()
+
+
+@pytest.mark.asyncio
+async def test_traded_picks_filters_by_season(sleeper):
+    from sleeper_mcp.drafts import traded_picks
+    assert "2027" in await call(traded_picks, season="2027")
+    assert "2027" in sleeper.SENT[-1][1].values()
+
+
+@pytest.mark.asyncio
+async def test_player_outlook_prints_the_published_analysis(sleeper):
+    from sleeper_mcp.reads import player_outlook
+    out = await call(player_outlook, player_name="Doe Catcher")
+    assert "He should see the field." in out
+
+
+@pytest.mark.asyncio
+async def test_draft_picks_names_a_traded_pick(sleeper):
+    from sleeper_mcp.reads import draft_picks
+    assert "2027 round 6" in await call(draft_picks)
+
+
+@pytest.mark.asyncio
+async def test_chat_reads_the_league_messages(sleeper):
+    from sleeper_mcp.reads import chat
+    assert "League chat" in await call(chat)
+
+
+@pytest.mark.asyncio
+async def test_trending_names_the_players(sleeper):
+    from sleeper_mcp.reads import trending
+    assert "Fox Catcher" in await call(trending, kind="add")
+
+
+@pytest.mark.asyncio
+async def test_set_lineup_reads_the_lineup_back(sleeper, monkeypatch):
+    """The read-back is a second, authenticated query. Its failure prints
+    VERIFICATION FAILED, which is neither answer below."""
+    from sleeper_mcp import client
+    from sleeper_mcp.writes import set_lineup
+    monkeypatch.setattr(client, "WRITES_ENABLED", True)
+    out = await call(set_lineup, players_in_slot_order=[
+        "Ant Quarterback", "Bee Runner", "Doe Catcher", "Gnu Tight",
+        "Jay Runner", "Hen Kicker", "Aardvarks"], confirm=True)
+    assert out.startswith(("VERIFIED", "MISMATCH"))
+
+
+@pytest.mark.asyncio
+async def test_trade_block_adds_and_removes(sleeper, monkeypatch):
+    from sleeper_mcp import client
+    from sleeper_mcp.writes import trade_block
+    monkeypatch.setitem(fake.ROSTERS[0], "player_trade_block", ["wr1"])
+    monkeypatch.setattr(client, "WRITES_ENABLED", True)
+    out = await call(trade_block, add=["Ant Quarterback"],
+                     remove=["Doe Catcher"], confirm=True)
+    assert out.startswith("Applied.")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name, unwatch", [("Fox Catcher", False),
+                                           ("Elk Catcher", True)])
+async def test_watch_player_reads_the_watchlist_back(sleeper, monkeypatch,
+                                                     name, unwatch):
+    from sleeper_mcp import client
+    from sleeper_mcp.writes import watch_player
+    monkeypatch.setattr(client, "WRITES_ENABLED", True)
+    out = await call(watch_player, player_name=name, unwatch=unwatch)
+    assert out.startswith("VERIFIED")
+
+
 @pytest.mark.asyncio
 async def test_a_trade_does_not_list_each_player_twice(sleeper):
     """A trade puts every player in BOTH adds and drops. Printing the lists
@@ -628,9 +712,10 @@ def fd_league(sleeper, monkeypatch):
 
     async def gql(query, variables=None, auth=False):
         if "stats_for_players_in_week" in query and 'category:"proj"' in query:
+            ids = sleeper.arg(query, variables, "player_ids")
             return {"stats_for_players_in_week": [
                 {"player_id": p, "stats": dict(s)}
-                for p, s in STUB_PROJ.items() if f'"{p}"' in query]}
+                for p, s in STUB_PROJ.items() if p in ids]}
         return await sleeper.gql(query, variables, auth)
 
     for mod in ("reads", "lineups", "signals"):

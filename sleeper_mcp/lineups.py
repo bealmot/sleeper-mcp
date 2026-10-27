@@ -41,11 +41,11 @@ async def _pool(lg: str, rid: int, week: int):
     proj = {}
     if active:
         d = await gql(
-            '{stats_for_players_in_week(sport:"nfl",season:"%s",'
-            'season_type:"regular",week:%d,player_ids:%s,category:"proj")'
-            '{player_id stats}}'
-            % (lgd.get("season"), week,
-               "[" + ",".join(f'"{i}"' for i in active) + "]"))
+            "query($yr:String!,$wk:Int!,$ids:[String]){"
+            'stats_for_players_in_week(sport:"nfl",season:$yr,'
+            'season_type:"regular",week:$wk,player_ids:$ids,category:"proj")'
+            "{player_id stats}}",
+            {"yr": lgd.get("season"), "wk": week, "ids": active})
         proj = {r["player_id"]: r["stats"]
                 for r in (d.get("stats_for_players_in_week") or [])}
 
@@ -162,11 +162,11 @@ async def waiver_targets(league_id_: str = "", roster_id_: int = 0,
     for i in range(0, min(len(free), 600), 150):
         chunk = free[i:i + 150]
         d = await gql(
-            '{stats_for_players_in_week(sport:"nfl",season:"%s",'
-            'season_type:"regular",week:%d,player_ids:%s,category:"proj")'
-            '{player_id stats}}'
-            % (lgd.get("season"), wk,
-               "[" + ",".join(f'"{c}"' for c in chunk) + "]"))
+            "query($yr:String!,$wk:Int!,$ids:[String]){"
+            'stats_for_players_in_week(sport:"nfl",season:$yr,'
+            'season_type:"regular",week:$wk,player_ids:$ids,category:"proj")'
+            "{player_id stats}}",
+            {"yr": lgd.get("season"), "wk": wk, "ids": chunk})
         for r in (d.get("stats_for_players_in_week") or []):
             proj[r["player_id"]] = r["stats"]
 

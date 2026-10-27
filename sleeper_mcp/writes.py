@@ -123,8 +123,10 @@ async def set_lineup(players_in_slot_order: list[str], league_id_: str = "",
     # wrote — and note that it is authenticated, so its own failure is not
     # evidence the write failed.
     try:
-        chk = await gql('{matchup_legs(round:%d,league_id:"%s")'
-                        '{roster_id starters}}' % (wk, lg), auth=True)
+        chk = await gql("query($r:Int!,$lg:Snowflake!){"
+                        "matchup_legs(round:$r,league_id:$lg)"
+                        "{roster_id starters}}", {"r": wk, "lg": lg},
+                        auth=True)
     except Exception as e:
         return (f"WRITE SENT, VERIFICATION FAILED ({e.__class__.__name__}). "
                 f"The mutation returned no error, so the lineup may well be "
@@ -293,11 +295,15 @@ async def trade_block(add: list[str] | None = None,
     require_writes("trade_block")
     cache_clear()
     for p in a:
-        await gql('mutation{add_league_player_trade_block(player_id:"%s",'
-                  'league_id:"%s"){roster_id}}' % (p, lg), auth=True)
+        await gql("mutation($pid:String!,$lg:Snowflake!){"
+                  "add_league_player_trade_block(player_id:$pid,"
+                  "league_id:$lg){roster_id}}", {"pid": p, "lg": lg},
+                  auth=True)
     for p in r:
-        await gql('mutation{remove_league_player_trade_block(player_id:"%s",'
-                  'league_id:"%s"){roster_id}}' % (p, lg), auth=True)
+        await gql("mutation($pid:String!,$lg:Snowflake!){"
+                  "remove_league_player_trade_block(player_id:$pid,"
+                  "league_id:$lg){roster_id}}", {"pid": p, "lg": lg},
+                  auth=True)
     return f"Applied.\n{plan}"
 
 
@@ -424,8 +430,9 @@ async def pickem_pick(game_id: str, team: str, week: int = 0,
         # first, so select by leg_id — the first leg is not the current week.
         # This read used to go out without a token (Sleeper: Unauthorized, so
         # even the dry run raised) and took legs[0], which read last week.
-        d = await gql('{get_pickem_legs(league_id:"%s",roster_id:%d)'
-                      '{leg_id picks}}' % (lg, rid), auth=True)
+        d = await gql("query($lg:String!,$rid:Int!){"
+                      "get_pickem_legs(league_id:$lg,roster_id:$rid)"
+                      "{leg_id picks}}", {"lg": lg, "rid": rid}, auth=True)
         return next((x for x in (d.get("get_pickem_legs") or [])
                      if x.get("leg_id") == leg_id), None)
 
@@ -496,8 +503,10 @@ async def pickem_tiebreaker(total_points: int, game_id: str = "",
     async def read_leg():
         # AUTHENTICATED, and it returns EVERY week's leg, so select by
         # leg_id — the first leg is not the current week.
-        d = await gql('{get_pickem_legs(league_id:"%s",roster_id:%d)'
-                      '{leg_id tiebreaker}}' % (lg, rid), auth=True)
+        d = await gql("query($lg:String!,$rid:Int!){"
+                      "get_pickem_legs(league_id:$lg,roster_id:$rid)"
+                      "{leg_id tiebreaker}}", {"lg": lg, "rid": rid},
+                      auth=True)
         return next((x for x in (d.get("get_pickem_legs") or [])
                      if x.get("leg_id") == leg_id), None)
 
@@ -558,11 +567,13 @@ async def watch_player(player_name: str, unwatch: bool = False) -> str:
     pid, v = hits[0]
     season = (await rest("/state/nfl")).get("season")
     if unwatch:
-        await gql('mutation{unwatch_player(sport:"nfl",season:"%s",'
-                  'player_id:"%s")}' % (season, pid), auth=True)
+        await gql("mutation($yr:String,$pid:String!){"
+                  'unwatch_player(sport:"nfl",season:$yr,player_id:$pid)}',
+                  {"yr": season, "pid": pid}, auth=True)
     else:
-        await gql('mutation{watch_player(sport:"nfl",season:"%s",'
-                  'player_id:"%s"){player_id}}' % (season, pid), auth=True)
+        await gql("mutation($yr:String,$pid:String!){"
+                  'watch_player(sport:"nfl",season:$yr,player_id:$pid)'
+                  "{player_id}}", {"yr": season, "pid": pid}, auth=True)
     back = await gql('{watched_players(sport:"nfl"){player_id}}', auth=True)
     ids = {w["player_id"] for w in (back.get("watched_players") or [])}
     ok = (pid not in ids) if unwatch else (pid in ids)

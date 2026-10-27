@@ -34,10 +34,12 @@ async def _week(season: str, week: int) -> list[dict]:
     every receiver's target share past 1.0 — a query bug that presents as a
     maths bug.
     """
-    q = ('{weekly_stats(sport:"nfl",season:"%s",season_type:"%s",week:%d,'
-         'category:"%s",order_by:"%s"){player_id team opponent week stats}}'
-         % (season, SEASON_TYPE, week, CATEGORY, ORDER_BY))
-    return (await gql(q)).get("weekly_stats") or []
+    q = ("query($yr:String!,$t:String!,$wk:Int!,$c:String!,$o:String!){"
+         'weekly_stats(sport:"nfl",season:$yr,season_type:$t,week:$wk,'
+         "category:$c,order_by:$o){player_id team opponent week stats}}")
+    return (await gql(q, {"yr": season, "t": SEASON_TYPE, "wk": week,
+                          "c": CATEGORY, "o": ORDER_BY})
+            ).get("weekly_stats") or []
 
 
 async def _history(season: str, through: int,
@@ -261,10 +263,11 @@ async def season_rows(season: str) -> list[dict]:
     buckets by (team, week) while skipping rows with no week — so these are
     stamped week 0. One bucket per team is exactly right for a season.
     """
-    q = ('{season_stats(sport:"nfl",season:"%s",season_type:"regular",'
-         'category:"%s",order_by:"%s"){player_id team stats}}'
-         % (season, CATEGORY, ORDER_BY))
-    rows = (await gql(q)).get("season_stats") or []
+    q = ("query($yr:String!,$c:String!,$o:String!){"
+         'season_stats(sport:"nfl",season:$yr,season_type:"regular",'
+         "category:$c,order_by:$o){player_id team stats}}")
+    rows = (await gql(q, {"yr": season, "c": CATEGORY, "o": ORDER_BY})
+            ).get("season_stats") or []
     return [{**r, "week": 0} for r in rows]
 
 
