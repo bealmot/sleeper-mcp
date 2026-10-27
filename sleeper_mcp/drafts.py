@@ -186,10 +186,15 @@ async def traded_picks(season: str = "", league_id_: str = "") -> str:
         league_id_: Override the configured league.
     """
     lg = league_id(league_id_ or None)
-    arg = f',season:"{season}"' if season else ""
-    rows = (await gql('{roster_draft_picks(league_id:"%s"%s)'
-                      '{season round roster_id owner_id previous_owner_id}}'
-                      % (lg, arg), auth=True)).get("roster_draft_picks") or []
+    # `season` is an argument only when it is given: GraphQL tells an explicit
+    # null from an absent argument. Its value goes in the variables.
+    yr, arg = (",$yr:String", ",season:$yr") if season else ("", "")
+    rows = (await gql("query($lg:Snowflake!%s){"
+                      "roster_draft_picks(league_id:$lg%s)"
+                      "{season round roster_id owner_id previous_owner_id}}"
+                      % (yr, arg),
+                      {"lg": lg, **({"yr": season} if season else {})},
+                      auth=True)).get("roster_draft_picks") or []
     if not rows:
         return ("  No draft picks have changed hands"
                 + (f" for {season}" if season else "") +

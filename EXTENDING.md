@@ -106,7 +106,8 @@ it standalone.
 
 **Score against the league's own settings.** `pts_ppr` is a preset and is wrong
 for half-PPR, first-down, or TE-premium leagues. Use `scored()` with
-`league.scoring_settings`.
+`league.scoring_settings`. Pass a PROJECTION through
+`firstdowns.fd_from_yards()` first: Sleeper projects first downs as yards / 10.
 
 **Read slots from the league.** `roster_positions` varies enormously and
 `set_lineup` is positional. A hardcoded slot array does not error — it silently
@@ -118,6 +119,13 @@ starts players in the wrong slots.
 pre-write state. Read back over GraphQL, through a different query than the one
 that wrote — and remember a verification step can fail on its own terms, which
 is not the same as the write failing.
+
+**Send values as GraphQL variables, never in the query text.**
+`gql("query($lg:Snowflake!){messages(parent_id:$lg){text}}", {"lg": lg},
+auth=True)`. A league id spliced into the text can add fields to a query that
+runs with the user's token. Take each argument's type from Sleeper's schema
+(introspection works; its fields are snake_case, `of_type`). The test suite
+fails any request whose text holds a value.
 
 **Report absence as absence.** A missing projection is not zero, and a player
 with no entry in your signal file is not a negative signal. Both should say so.

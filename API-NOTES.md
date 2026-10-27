@@ -117,6 +117,16 @@ on the bench because he occupies the IR slot. Not a bug.
 Sleeper only renders lineup controls on the `/team` route — you cannot swap a
 player from `/matchup` by hand. The API does not care.
 
+### Projected first downs are yards / 10
+
+In `stats_for_players_in_week(category: "proj")`, every `rec_fd`, `rush_fd`
+and `pass_fd` equals its yards divided by ten. The match is exact for 44,533
+of 44,533 values, 2022 to 2026. Real players convert about 0.04 first downs
+per yard, so the stub is about 2.4x too high. A week-7 receiver projected 4.15
+catches and 6.28 first downs. Actuals (`category: "stat"`) carry real counts.
+`firstdowns.fd_from_yards()` rebuilds a projection from a measured rate per
+position before it is scored.
+
 ## Drafts
 
 `GET /draft/{draft_id}/picks` gives the board, with `is_keeper` marking keepers
@@ -241,6 +251,15 @@ two. To see a week completely you need both.
 The gap matters because it changes what the data means. That league proposed
 36 trades and completed 4; a completed-only list contains the four and cannot
 distinguish a quiet league from one where nobody accepts.
+
+**REST also hides your own PENDING WAIVER CLAIMS.** Measured 2026-10-23: two
+claims queued minutes earlier were absent from REST `/transactions/<leg>`, also
+with a cache-busting query, and present in `league_transactions(league_id,
+leg)` with `status: "pending"` and the bid in `settings.waiver_bid`. That query
+also takes `status`, `type`, `roster_id` and `limit`, and answers
+`Unauthorized` without a token. Over legs 1-7 it held every trade REST held,
+plus the cancelled and rejected ones. Whether it holds a PENDING trade was not
+observable, because none existed, so `pending` reads both and merges by id.
 
 **A trade puts every player in BOTH `adds` and `drops`,** since he moves
 between rosters. Printing the two lists separately shows each player twice,

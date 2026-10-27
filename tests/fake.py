@@ -43,6 +43,10 @@ PICKS_DEFAULT = {"g1": {"team": "AAA", "outcome": "win"}}
 PICKS: dict = {}
 LAST_PICK: dict = {}
 
+# Every GraphQL request a tool sent, as (query, variables). conftest reads it
+# after each test and fails the test on what `problems` finds.
+SENT: list = []
+
 PLAYERS = {
     "qb1": {"full_name": "Ant Quarterback", "position": "QB", "team": "AAA"},
     "rb1": {"full_name": "Bee Runner", "position": "RB", "team": "AAA"},
@@ -122,6 +126,15 @@ TRANSACTIONS = [
      "adds": {"wr3": 1}, "drops": {"k1": 1}, "draft_picks": None,
      "waiver_budget": None},
 ]
+
+# YOUR OWN PENDING WAIVER CLAIM. Only authenticated GraphQL
+# `league_transactions` returns it; the public REST feed omits it, so it is
+# deliberately NOT in TRANSACTIONS. Shaped like the real row of 2026-10-23:
+# no draft_picks, no waiver_budget, and the bid inside `settings`.
+PENDING_CLAIM = {"transaction_id": "w9", "type": "waiver", "status": "pending",
+                 "leg": 5, "created": 1757272300000, "roster_ids": [1],
+                 "adds": {"wr3": 1}, "drops": {"k1": 1},
+                 "settings": {"waiver_bid": 1}}
 
 STATS = {
     "wr1": {"rec_tgt": 30.0, "rec": 20.0, "rec_yd": 250.0, "off_snp": 200.0,
@@ -209,15 +222,80 @@ def _needs_token(op: str, auth: bool) -> None:
         raise RuntimeError(f"{op}: Unauthorized")
 
 
+# THE ONLY STRINGS A QUERY'S TEXT MAY HOLD. Every other value travels in the
+# variables. A value spliced into the text can change the query itself: a
+# league id of `1"){...} x:matchup_legs(league_id:"1` adds fields to a query
+# that runs with the user's token. Real Sleeper runs a spliced query, so only
+# a test can refuse one.
+LITERALS = {"nfl", "regular", "proj"}
+
+# How Sleeper coerces a variable. Snowflake is sent as a string, as the
+# writes that work live send it.
+_SCALARS = {"Int": int, "String": str, "Snowflake": str}
+
+
+def _fits(kind: str, value) -> bool:
+    kind = kind.rstrip("!")
+    if value is None:
+        return True
+    if kind.startswith("["):
+        return isinstance(value, list) and all(_fits(kind[1:-1], v)
+                                               for v in value)
+    want = _SCALARS.get(kind)
+    return want is None or (isinstance(value, want)
+                            and not isinstance(value, bool))
+
+
+def problems(query: str, variables: dict | None) -> list[str]:
+    """What is wrong with one request: a string spliced into the text, or a
+    variable that Sleeper refuses (declared and unused, used and undeclared,
+    sent and undeclared, required and missing, or of the wrong type).
+
+    Numbers in the text are not checked. A %d cannot carry a quote.
+    """
+    variables = variables or {}
+    out = [f"spliced {s!r}" for s in
+           sorted(set(re.findall(r'"([^"]*)"', query)) - LITERALS)]
+    head = re.match(r"\s*(?:query|mutation)\s*\(([^)]*)\)", query)
+    declared = (dict(re.findall(r"\$(\w+)\s*:\s*([\w\[\]!]+)", head.group(1)))
+                if head else {})
+    used = set(re.findall(r"\$(\w+)", query[head.end():] if head else query))
+    out += [f"${v} declared, never used" for v in sorted(set(declared) - used)]
+    out += [f"${v} used, never declared" for v in sorted(used - set(declared))]
+    out += [f"${v} sent, never declared"
+            for v in sorted(set(variables) - set(declared))]
+    for v, kind in declared.items():
+        if kind.endswith("!") and variables.get(v) is None:
+            out.append(f"${v} is {kind} and has no value")
+        elif not _fits(kind, variables.get(v)):
+            out.append(f"${v} is {kind}, got {variables[v]!r}")
+    # An id argument gets an id this fake knows, so a variable bound to the
+    # wrong value (a player id as the league) is caught.
+    known = {"league_id": {LEAGUE, PICKEM_LEAGUE, PREV_LEAGUE},
+             "parent_id": {LEAGUE}, "player_id": set(PLAYERS),
+             "player_ids": set(PLAYERS)}
+    for arg, v in re.findall(r"\b(\w+):\$(\w+)", query):
+        got = variables.get(v)
+        for g in (got if isinstance(got, list) else [got]):
+            if arg in known and g is not None and g not in known[arg]:
+                out.append(f"{arg} is {g!r}, which is not a known id")
+    return out
+
+
+def arg(query: str, variables: dict, name: str):
+    """The value of argument `name`, read through the variable bound to it."""
+    return variables[re.search(rf"\b{name}:\$(\w+)", query).group(1)]
+
+
 async def gql(query: str, variables=None, auth: bool = False):
     q = " ".join(query.split())
+    SENT.append((q, variables))
     if "weekly_stats" in q:
-        wk = int(re.search(r"week:(\d+)", q).group(1))
-        return {"weekly_stats": _stat_rows(wk)}
+        return {"weekly_stats": _stat_rows(arg(q, variables, "week"))}
     if "season_stats" in q:
         return {"season_stats": [{**r, "week": None} for r in _stat_rows(1)]}
     if "roster_standings" in q:
-        rnd = int(re.search(r"round:(\d+)", q).group(1))
+        rnd = arg(q, variables, "round")
         return {"roster_standings": [
             {"roster_id": 1, "rank": 1, "wins": rnd, "losses": 0, "ties": 0,
              "points": 100.0 * rnd, "record": "W" * rnd},
@@ -227,6 +305,12 @@ async def gql(query: str, variables=None, auth: bool = False):
         return {"league_transactions_by_player": TRANSACTIONS}
     if "league_transactions_filtered" in q:
         return {"league_transactions_filtered": TRANSACTIONS}
+    if "league_transactions(" in q:
+        _needs_token("league_transactions", auth)
+        return {"league_transactions": TRANSACTIONS + [PENDING_CLAIM]}
+    if "roster_draft_picks_by_owner" in q:
+        return {"roster_draft_picks_by_owner": [
+            {"season": "2027", "round": 6, "roster_id": 2}]}
     if "roster_draft_picks" in q:
         return {"roster_draft_picks": [
             {"season": "2027", "round": 6, "roster_id": 2, "owner_id": 1,
@@ -246,6 +330,11 @@ async def gql(query: str, variables=None, auth: bool = False):
              "metadata": {"title": "A thing happened",
                           "description": "He did a thing.",
                           "analysis": "It may matter.", "topic_id": "1"}}]}
+    if "get_player_outlook" in q:
+        return {"get_player_outlook": {
+            "source": "fake wire", "published": 1757272204863,
+            "metadata": {"title": "Season outlook",
+                         "analysis": "He should see the field."}}}
     if "stats_for_players_in_week" in q:
         return {"stats_for_players_in_week": [
             {"player_id": "wr3", "stats": {"rec": 4, "rec_yd": 50,
@@ -257,6 +346,23 @@ async def gql(query: str, variables=None, auth: bool = False):
         board = await rest("/scores/nfl/regular/2026/5")
         return {"scores": [{"game_id": g["game_id"], "metadata": g["metadata"]}
                            for g in board]}
+    if "update_matchup_leg" in q:
+        _needs_token("update_matchup_leg", auth)
+        return {"update_matchup_leg": {"roster_id": variables["rid"],
+                                       "starters": variables["s"]}}
+    if "_league_player_trade_block" in q:
+        op = re.search(r"\w+_league_player_trade_block", q).group(0)
+        _needs_token(op, auth)
+        return {op: {"roster_id": ROSTER}}
+    # Not stateful: the watchlist holds wr3 whatever is sent, so a test
+    # watches wr3 or unwatches someone else.
+    if "watch_player" in q:
+        _needs_token("watch_player", auth)
+        return ({"unwatch_player": True} if "unwatch_player" in q
+                else {"watch_player": {"player_id": "wr3"}})
+    if "watched_players" in q:
+        _needs_token("watched_players", auth)
+        return {"watched_players": [{"player_id": "wr3"}]}
     if "set_pickem_tiebreaker" in q:
         _needs_token("set_pickem_tiebreaker", auth)
         TIEBREAKER.clear()

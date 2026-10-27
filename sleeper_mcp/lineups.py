@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from .client import (current_week, gql, league, league_id, READ, mcp, players, rest,
                      roster_id, scored, starting_slots)
+from .firstdowns import fd_from_yards, fd_note
 from .optimizer import best_lineup, eligible  # noqa: F401  (re-exported)
 
 
@@ -40,11 +41,11 @@ async def _pool(lg: str, rid: int, week: int):
     proj = {}
     if active:
         d = await gql(
-            '{stats_for_players_in_week(sport:"nfl",season:"%s",'
-            'season_type:"regular",week:%d,player_ids:%s,category:"proj")'
-            '{player_id stats}}'
-            % (lgd.get("season"), week,
-               "[" + ",".join(f'"{i}"' for i in active) + "]"))
+            "query($yr:String!,$wk:Int!,$ids:[String]){"
+            'stats_for_players_in_week(sport:"nfl",season:$yr,'
+            'season_type:"regular",week:$wk,player_ids:$ids,category:"proj")'
+            "{player_id stats}}",
+            {"yr": lgd.get("season"), "wk": week, "ids": active})
         proj = {r["player_id"]: r["stats"]
                 for r in (d.get("stats_for_players_in_week") or [])}
 
@@ -54,7 +55,8 @@ async def _pool(lg: str, rid: int, week: int):
         pool.append({"pos": v.get("position"), "name": v.get("full_name") or pid,
                      "id": pid, "team": v.get("team"),
                      "inj": v.get("injury_status") or "",
-                     "pts": scored(proj[pid], scoring) if pid in proj else None})
+                     "pts": (scored(fd_from_yards(proj[pid], v.get("position")),
+                                    scoring) if pid in proj else None)})
     return pool, P, lgd
 
 
@@ -160,11 +162,11 @@ async def waiver_targets(league_id_: str = "", roster_id_: int = 0,
     for i in range(0, min(len(free), 600), 150):
         chunk = free[i:i + 150]
         d = await gql(
-            '{stats_for_players_in_week(sport:"nfl",season:"%s",'
-            'season_type:"regular",week:%d,player_ids:%s,category:"proj")'
-            '{player_id stats}}'
-            % (lgd.get("season"), wk,
-               "[" + ",".join(f'"{c}"' for c in chunk) + "]"))
+            "query($yr:String!,$wk:Int!,$ids:[String]){"
+            'stats_for_players_in_week(sport:"nfl",season:$yr,'
+            'season_type:"regular",week:$wk,player_ids:$ids,category:"proj")'
+            "{player_id stats}}",
+            {"yr": lgd.get("season"), "wk": wk, "ids": chunk})
         for r in (d.get("stats_for_players_in_week") or []):
             proj[r["player_id"]] = r["stats"]
 
@@ -172,7 +174,7 @@ async def waiver_targets(league_id_: str = "", roster_id_: int = 0,
     rows = []
     for pid, stats in proj.items():
         v = P.get(pid) or {}
-        pts = scored(stats, scoring)
+        pts = scored(fd_from_yards(stats, v.get("position")), scoring)
         if pts <= 0:
             continue
         cand = {"pos": v.get("position"), "name": v.get("full_name") or pid,
@@ -186,7 +188,10 @@ async def waiver_targets(league_id_: str = "", roster_id_: int = 0,
 
     out = [f"{lgd.get('name')} — week {wk} waiver targets",
            f"  your best legal lineup projects {base:.1f}",
-           f"  {len(proj)} free agents priced, {len(rows)} improve it", ""]
+           f"  {len(proj)} free agents priced, {len(rows)} improve it"]
+    if note := fd_note(scoring):
+        out.append(note)
+    out.append("")
     if not rows:
         out.append("  NOTHING improves your lineup this week. That is a real "
                    "answer, not an empty list — your starters beat every "

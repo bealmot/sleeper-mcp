@@ -55,6 +55,7 @@ import os
 
 from .client import (current_week, gql, league, league_id, READ, mcp, players, rest,
                      roster_id, scored, teams_playing)
+from .firstdowns import fd_from_yards
 from .optimizer import percentile_within as _pct_within
 
 SIGNAL_FILE = (os.environ.get("SLEEPER_SIGNAL_FILE") or "").strip()
@@ -136,13 +137,15 @@ async def signal_divergence(min_evidence: int = 1, gap: int = 25,
     for i in range(0, len(ids), 150):
         chunk = ids[i:i + 150]
         d = await gql(
-            '{stats_for_players_in_week(sport:"nfl",season:"%s",'
-            'season_type:"regular",week:%d,player_ids:%s,category:"proj")'
-            '{player_id stats}}'
-            % (lgd.get("season"), wk,
-               "[" + ",".join(f'"{c}"' for c in chunk) + "]"))
+            "query($yr:String!,$wk:Int!,$ids:[String]){"
+            'stats_for_players_in_week(sport:"nfl",season:$yr,'
+            'season_type:"regular",week:$wk,player_ids:$ids,category:"proj")'
+            "{player_id stats}}",
+            {"yr": lgd.get("season"), "wk": wk, "ids": chunk})
         for r in (d.get("stats_for_players_in_week") or []):
-            proj[r["player_id"]] = scored(r["stats"], scoring)
+            pos = (P.get(r["player_id"]) or {}).get("position")
+            proj[r["player_id"]] = scored(fd_from_yards(r["stats"], pos),
+                                          scoring)
 
     rosters = await rest(f"/league/{lg}/rosters")
     owned = {str(p) for r in rosters for p in (r.get("players") or [])}

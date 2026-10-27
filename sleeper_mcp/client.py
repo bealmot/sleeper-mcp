@@ -225,6 +225,11 @@ async def gql(query: str, variables: dict | None = None,
 
     `auth=True` is needed for more than just mutations — `matchup_legs` and
     `messages` are authenticated READS, unlike most league queries.
+
+    VALUES GO IN `variables`, NEVER IN THE QUERY TEXT. A league id spliced
+    into the text, such as `1"){...} x:matchup_legs(league_id:"1`, adds fields
+    to a query that runs with the user's token. tests/conftest.py fails any
+    test that sends a spliced string.
     """
     # Refuse Sleeper's real-money surface before the request is built. See
     # boundaries.py — this server is fantasy-only, deliberately.
@@ -464,6 +469,10 @@ def scored(stats: dict, scoring: dict) -> float:
     league that deviates — half-PPR, per-first-down scoring, 6-point passing
     touchdowns, TE premium. `league.scoring_settings` is the league's actual
     rulebook, so weekly value is computed from raw components against it.
+
+    Pass a projection through `firstdowns.fd_from_yards()` first. Sleeper
+    projects every first down as yards / 10, and this dot product would score
+    that stub as faithfully as it scores everything else.
     """
     return round(sum(scoring.get(k, 0) * v for k, v in stats.items()
                      if isinstance(v, (int, float))), 2)

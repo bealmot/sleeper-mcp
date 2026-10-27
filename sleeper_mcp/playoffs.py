@@ -305,9 +305,10 @@ async def standings_trend(league_id_: str = "", previous: bool = False) -> str:
 
     weeks = list(range(1, through + 1))
     fetched = await asyncio.gather(
-        *(gql('{roster_standings(league_id:"%s",round:%d)'
-              '{roster_id rank wins losses ties points record}}' % (lg, w),
-              auth=True) for w in weeks),
+        *(gql("query($lg:Snowflake!,$r:Int!){"
+              "roster_standings(league_id:$lg,round:$r)"
+              "{roster_id rank wins losses ties points record}}",
+              {"lg": lg, "r": w}, auth=True) for w in weeks),
         return_exceptions=True)
 
     history: dict = {}

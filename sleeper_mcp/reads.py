@@ -7,6 +7,7 @@ import datetime as dt
 from .client import (AuthError, ConfigError, current_week, gql, league,
                      league_id, READ, mcp, owners, players, rest, roster_id,
                      scored, state)
+from .firstdowns import fd_from_yards, fd_note
 from .lookup import ambiguous, find_player
 from .season import confidence, team_strength
 
@@ -45,17 +46,18 @@ async def roster(league_id_: str = "", roster_id_: int = 0,
     proj = {}
     if ids:
         d = await gql(
-            '{stats_for_players_in_week(sport:"nfl",season:"%s",'
-            'season_type:"regular",week:%d,player_ids:%s,category:"proj")'
-            '{player_id stats}}'
-            % (lgd.get("season"), wk,
-               "[" + ",".join(f'"{i}"' for i in ids) + "]"))
+            "query($yr:String!,$wk:Int!,$ids:[String]){"
+            'stats_for_players_in_week(sport:"nfl",season:$yr,'
+            'season_type:"regular",week:$wk,player_ids:$ids,category:"proj")'
+            "{player_id stats}}",
+            {"yr": lgd.get("season"), "wk": wk, "ids": ids})
         proj = {r["player_id"]: r["stats"]
                 for r in (d.get("stats_for_players_in_week") or [])}
 
     def line(pid, slot=None):
         v = P.get(pid) or {}
-        pts = scored(proj[pid], scoring) if pid in proj else None
+        pts = (scored(fd_from_yards(proj[pid], v.get("position")), scoring)
+               if pid in proj else None)
         inj = f"  [{v['injury_status']}]" if v.get("injury_status") else ""
         return (f"  {slot or v.get('position', '?'):5} "
                 f"{(v.get('full_name') or pid)[:24]:24} "
@@ -74,6 +76,8 @@ async def roster(league_id_: str = "", roster_id_: int = 0,
     out.append("")
     out.append(f"  scored under {lgd.get('name')}'s own settings "
                f"({len(scoring)} scoring keys), not pts_ppr")
+    if note := fd_note(scoring):
+        out.append(note)
     return "\n".join(out)
 
 
@@ -96,9 +100,10 @@ async def matchup(league_id_: str = "", week: int = 0) -> str:
 
     legs, projected, why = [], True, ""
     try:
-        d = await gql('{matchup_legs(round:%d,league_id:"%s")'
-                      '{roster_id matchup_id proj_points}}' % (wk, lg),
-                      auth=True)
+        d = await gql("query($r:Int!,$lg:Snowflake!){"
+                      "matchup_legs(round:$r,league_id:$lg)"
+                      "{roster_id matchup_id proj_points}}",
+                      {"r": wk, "lg": lg}, auth=True)
         legs = d.get("matchup_legs") or []
     except Exception as e:
         # WHY it failed decides what to tell the user. A blanket "projections
@@ -199,8 +204,9 @@ async def player_news(player_name: str, limit: int = 4) -> str:
     if len(hits) != 1:
         return ambiguous(player_name, hits)
     pid, v = hits[0]
-    d = await gql('{get_player_news(sport:"nfl",player_id:"%s",limit:%d)'
-                  '{source published metadata}}' % (pid, limit))
+    d = await gql("query($pid:String!,$n:Int){"
+                  'get_player_news(sport:"nfl",player_id:$pid,limit:$n)'
+                  "{source published metadata}}", {"pid": pid, "n": limit})
     out = [f"{v.get('full_name')} — {v.get('position')} {v.get('team')}"
            f"   status={v.get('injury_status') or 'healthy'}"
            f"   depth_chart={v.get('depth_chart_order')}", ""]
@@ -230,8 +236,9 @@ async def player_outlook(player_name: str, season: str = "") -> str:
         return ambiguous(player_name, hits)
     pid, v = hits[0]
     yr = season or (await rest("/state/nfl")).get("season")
-    d = await gql('{get_player_outlook(sport:"nfl",season:"%s",player_id:"%s")'
-                  '{source published metadata}}' % (yr, pid))
+    d = await gql("query($yr:String!,$pid:String!){"
+                  'get_player_outlook(sport:"nfl",season:$yr,player_id:$pid)'
+                  "{source published metadata}}", {"yr": yr, "pid": pid})
     o = d.get("get_player_outlook")
     if not o:
         return f"No outlook published for {v.get('full_name')}."
@@ -272,17 +279,45 @@ async def transactions(league_id_: str = "", week: int = 0) -> str:
 async def pending(league_id_: str = "", week: int = 0) -> str:
     """Pending trades and waiver claims, with the ids needed to act on them.
 
-    Sleeper has NO GraphQL query for trades at all, so pending items come from
-    the REST transactions feed. accept_trade, reject_trade and
-    cancel_waiver_claim all need a transaction_id, and this is the only place
-    to get one.
+    accept_trade, reject_trade and cancel_waiver_claim all need a
+    transaction_id, and this is the only place to get one.
+
+    THE PUBLIC REST FEED HIDES YOUR OWN PENDING WAIVER CLAIMS. On 2026-10-23 a
+    claim submitted a minute earlier was absent from REST and present in
+    authenticated GraphQL `league_transactions`, and this tool said "Nothing
+    pending" while it was queued. So with a token, GraphQL is read as well.
+
+    The two are merged by transaction id, because neither is a superset (see
+    `transaction_search`). GraphQL carries trades in every status REST does,
+    but no pending trade existed to prove it carries those, so a pending row
+    only REST holds is kept. Where both hold an id, GraphQL's status wins: REST
+    is Cloudflare-cached and can still say pending after a trade completes.
+
+    Without a token this reads REST alone, and says so in the output.
     """
     lg = league_id(league_id_ or None)
     wk = week or await current_week()
     P, owner = await players(), await owners(lg)
-    tx = await rest(f"/league/{lg}/transactions/{wk}") or []
-    pend = [t for t in tx if t.get("status") == "pending"]
-    out = [f"Pending — week {wk} ({len(pend)})", ""]
+    tx = {t.get("transaction_id"): t
+          for t in (await rest(f"/league/{lg}/transactions/{wk}") or [])}
+    try:
+        # Variables, not splicing: this runs with the user's token and the
+        # league id is caller input.
+        d = await gql("query($lg:Snowflake!,$leg:Int!){"
+                      "league_transactions(league_id:$lg,leg:$leg)"
+                      "{transaction_id status type leg adds drops settings "
+                      "roster_ids}}", {"lg": lg, "leg": wk}, auth=True)
+        tx.update({t.get("transaction_id"): t
+                   for t in (d.get("league_transactions") or [])})
+        source = "authenticated GraphQL league_transactions, merged with REST"
+    except Exception as e:
+        why = ("no SLEEPER_TOKEN" if isinstance(e, ConfigError)
+               else "Sleeper rejected SLEEPER_TOKEN" if isinstance(e, AuthError)
+               else f"GraphQL failed: {e.__class__.__name__}: {e}")
+        source = (f"public REST only ({why}). REST HIDES YOUR OWN PENDING "
+                  f"WAIVER CLAIMS, so a queued claim does not show here")
+    pend = [t for t in tx.values() if t.get("status") == "pending"]
+    out = [f"Pending — week {wk} ({len(pend)})", f"  source: {source}", ""]
     if not pend:
         out.append("  Nothing pending.")
     for t in pend:
@@ -312,9 +347,10 @@ async def draft_picks(league_id_: str = "") -> str:
     found = 0
     for rid in sorted(owner):
         try:
-            d = await gql('{roster_draft_picks_by_owner(league_id:"%s",'
-                          'owner_roster_id:"%d"){season round roster_id}}'
-                          % (lg, rid), auth=True)
+            d = await gql("query($lg:Snowflake!,$rid:Snowflake!){"
+                          "roster_draft_picks_by_owner(league_id:$lg,"
+                          "owner_roster_id:$rid){season round roster_id}}",
+                          {"lg": lg, "rid": str(rid)}, auth=True)
         except (AuthError, ConfigError) as e:
             return f"Needs a token: {e}"
         except Exception as e:
@@ -349,8 +385,9 @@ async def chat(league_id_: str = "", limit: int = 25, search: str = "") -> str:
         search: Case-insensitive substring filter.
     """
     lg = league_id(league_id_ or None)
-    d = await gql('{messages(parent_id:"%s"){message_id created '
-                  'author_display_name text pinned}}' % lg, auth=True)
+    d = await gql("query($lg:Snowflake!){messages(parent_id:$lg){message_id "
+                  "created author_display_name text pinned}}", {"lg": lg},
+                  auth=True)
     msgs = d.get("messages") or []
     msgs.sort(key=lambda m: m.get("created") or 0, reverse=True)
     if search:
@@ -402,7 +439,8 @@ async def trending(kind: str = "add", limit: int = 25) -> str:
     if kind not in ("add", "drop"):
         return f"kind must be 'add' or 'drop', got {kind!r}."
     P = await players()
-    d = await gql('{trending_players(sport:"nfl",sort:"%s"){player_id}}' % kind)
+    d = await gql('query($k:String!){trending_players(sport:"nfl",sort:$k)'
+                  "{player_id}}", {"k": kind})
     rows = d.get("trending_players") or []
     out = [f"Trending {kind}s ({len(rows)})", ""]
     for i, r in enumerate(rows[:limit], 1):
@@ -446,9 +484,10 @@ async def pickem_status(week: int = 0, pickem_league: str = "",
     # league reads are. Found by calling every tool in one pass rather than by
     # any static check, because nothing in the source says an endpoint needs a
     # token until Sleeper refuses it.
-    d = await gql('{get_pickem_legs(league_id:"%s",roster_id:%d)'
-                  '{leg_id status num_expected_picks picks tiebreaker}}'
-                  % (lg, rid), auth=True)
+    d = await gql("query($lg:String!,$rid:Int!){"
+                  "get_pickem_legs(league_id:$lg,roster_id:$rid)"
+                  "{leg_id status num_expected_picks picks tiebreaker}}",
+                  {"lg": lg, "rid": rid}, auth=True)
     legs = d.get("get_pickem_legs") or []
     leg = next((l for l in legs if str(l.get("leg_id", "")).endswith(f":{wk}")),
                legs[0] if legs else None)
@@ -457,8 +496,9 @@ async def pickem_status(week: int = 0, pickem_league: str = "",
     picks = leg.get("picks") or {}
     exp = leg.get("num_expected_picks") or 0
     season = (await rest("/state/nfl")).get("season")
-    s = await gql('{scores(sport:"nfl",season:"%s",season_type:"regular",'
-                  'week:%d){game_id metadata}}' % (season, wk))
+    s = await gql("query($yr:String!,$wk:Int){"
+                  'scores(sport:"nfl",season:$yr,season_type:"regular",'
+                  "week:$wk){game_id metadata}}", {"yr": season, "wk": wk})
     games = {g["game_id"]: (g.get("metadata") or {})
              for g in (s.get("scores") or [])}
     out = [f"Pick'em {leg.get('leg_id')} — {len(picks)} of {exp} picks made", ""]
@@ -506,10 +546,12 @@ async def player_history(player_name: str, limit: int = 25,
         return ambiguous(player_name, hits)
     pid, v = hits[0]
 
-    q = ('{league_transactions_by_player(league_id:"%s",player_id:"%s",'
-         'limit:%d,offset:0){type status created leg roster_ids adds drops '
-         'waiver_budget}}' % (lg, pid, max(1, min(limit, 100))))
-    rows = (await gql(q, auth=True)).get("league_transactions_by_player") or []
+    q = ("query($lg:Snowflake!,$pid:String!,$n:Int){"
+         "league_transactions_by_player(league_id:$lg,player_id:$pid,"
+         "limit:$n,offset:0){type status created leg roster_ids adds drops "
+         "waiver_budget}}")
+    rows = (await gql(q, {"lg": lg, "pid": pid, "n": max(1, min(limit, 100))},
+                      auth=True)).get("league_transactions_by_player") or []
     moves = history(rows, pid)
     if not moves:
         return (f"  {v.get('full_name')} has never been transacted in this "
@@ -598,16 +640,17 @@ async def transaction_search(kind: str = "", status: str = "", week: int = 0,
     # rather than the first page of it. A completion rate computed over five
     # displayed rows is not a completion rate.
     fetch = max(1, min(max(limit, 200), 500))
-    args = [f'league_id:"{lg}"', f"limit:{fetch}"]
+    # (variable, type, argument, value). A filter is an argument only when it
+    # is set: GraphQL tells an explicit null from an absent argument, and the
+    # absent one is what Sleeper has answered. Values go in the variables.
+    args = [("lg", "Snowflake!", "league_id", lg), ("n", "Int", "limit", fetch)]
     parts = lambda s: [p.strip() for p in s.split(",") if p.strip()]
     if kind:
-        args.append("type_filters:[%s]"
-                    % ",".join(f'"{k}"' for k in parts(kind)))
+        args.append(("types", "[String]", "type_filters", parts(kind)))
     if status:
-        args.append("status_filters:[%s]"
-                    % ",".join(f'"{s}"' for s in parts(status)))
+        args.append(("statuses", "[String]", "status_filters", parts(status)))
     if week:
-        args.append(f"leg_filters:[{int(week)}]")
+        args.append(("legs", "[Int]", "leg_filters", [int(week)]))
     if manager:
         want = manager.strip().lower()
         rid = next((r for r, n in owner.items()
@@ -615,11 +658,14 @@ async def transaction_search(kind: str = "", status: str = "", week: int = 0,
         if rid is None:
             return (f"  No manager matching {manager!r}. This league: "
                     + ", ".join(sorted(str(n) for n in owner.values())))
-        args.append(f"roster_id_filters:[{rid}]")
+        args.append(("rids", "[Int]", "roster_id_filters", [rid]))
 
-    q = ("{league_transactions_filtered(%s){type status leg created "
-         "roster_ids adds drops waiver_budget draft_picks}}" % ",".join(args))
-    rows = (await gql(q, auth=True)).get("league_transactions_filtered") or []
+    q = ("query(%s){league_transactions_filtered(%s){type status leg created "
+         "roster_ids adds drops waiver_budget draft_picks}}"
+         % (",".join(f"${v}:{t}" for v, t, _, _ in args),
+            ",".join(f"{a}:${v}" for v, _, a, _ in args)))
+    rows = (await gql(q, {v: x for v, _, _, x in args}, auth=True)
+            ).get("league_transactions_filtered") or []
     if not rows:
         return "  Nothing matched those filters."
 
@@ -713,8 +759,9 @@ async def pickem_consensus(week: int = 0, pickem_league: str = "",
             "(or the arguments). The ids come from the app's share link.")
     wk = week or await current_week()
 
-    legs = (await gql('{get_pickem_legs(league_id:"%s",roster_id:%d)'
-                      '{leg_id}}' % (lg, rid), auth=True)
+    legs = (await gql("query($lg:String!,$rid:Int!){"
+                      "get_pickem_legs(league_id:$lg,roster_id:$rid){leg_id}}",
+                      {"lg": lg, "rid": rid}, auth=True)
             ).get("get_pickem_legs") or []
     leg_id = next((l["leg_id"] for l in legs
                    if str(l.get("leg_id", "")).endswith(f":{wk}")), None)
@@ -722,8 +769,9 @@ async def pickem_consensus(week: int = 0, pickem_league: str = "",
         return (f"  No pick'em leg for week {wk}. Legs available: "
                 + ", ".join(sorted(str(l.get("leg_id")) for l in legs)) or "none")
 
-    book = (await gql('{get_pickem_picks_for_league(league_id:"%s",'
-                      'leg_id:"%s",include_tiebreaker:true)}' % (lg, leg_id),
+    book = (await gql("query($lg:String!,$leg:String!){"
+                      "get_pickem_picks_for_league(league_id:$lg,leg_id:$leg,"
+                      "include_tiebreaker:true)}", {"lg": lg, "leg": leg_id},
                       auth=True)).get("get_pickem_picks_for_league") or {}
     if not book:
         return f"  No picks published for {leg_id} yet."
@@ -789,8 +837,10 @@ async def pickem_consensus(week: int = 0, pickem_league: str = "",
                 "  HIT  " if you == won else "  MISS ")
         out.append(f"{mark}{matchup:14} {split:>16} {you:>5} {share:>9}{flag}")
 
-    scoring = (await gql('{get_pickem_scoring_settings(league_id:"%s")}' % lg,
-                         auth=True)).get("get_pickem_scoring_settings") or {}
+    scoring = (await gql("query($lg:Snowflake!){"
+                         "get_pickem_scoring_settings(league_id:$lg)}",
+                         {"lg": lg}, auth=True)
+               ).get("get_pickem_scoring_settings") or {}
     pts = scoring.get(leg_id)
     if pts is not None:
         weights = set(scoring.values())
