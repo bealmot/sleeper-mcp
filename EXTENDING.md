@@ -120,6 +120,13 @@ pre-write state. Read back over GraphQL, through a different query than the one
 that wrote — and remember a verification step can fail on its own terms, which
 is not the same as the write failing.
 
+**Send values as GraphQL variables, never in the query text.**
+`gql("query($lg:Snowflake!){messages(parent_id:$lg){text}}", {"lg": lg},
+auth=True)`. A league id spliced into the text can add fields to a query that
+runs with the user's token. Take each argument's type from Sleeper's schema
+(introspection works; its fields are snake_case, `of_type`). The test suite
+fails any request whose text holds a value.
+
 **Report absence as absence.** A missing projection is not zero, and a player
 with no entry in your signal file is not a negative signal. Both should say so.
 

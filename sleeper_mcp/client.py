@@ -225,6 +225,11 @@ async def gql(query: str, variables: dict | None = None,
 
     `auth=True` is needed for more than just mutations — `matchup_legs` and
     `messages` are authenticated READS, unlike most league queries.
+
+    VALUES GO IN `variables`, NEVER IN THE QUERY TEXT. A league id spliced
+    into the text, such as `1"){...} x:matchup_legs(league_id:"1`, adds fields
+    to a query that runs with the user's token. tests/conftest.py fails any
+    test that sends a spliced string.
     """
     # Refuse Sleeper's real-money surface before the request is built. See
     # boundaries.py — this server is fantasy-only, deliberately.
