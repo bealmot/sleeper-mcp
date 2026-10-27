@@ -421,8 +421,9 @@ async def teams_playing(week: int) -> set[str]:
     the dictionary still carries stale teams (OAK, observed 2026-10-23).
     """
     season = (await state()).get("season")
-    d = await gql('{scores(sport:"nfl",season:"%s",season_type:"regular",'
-                  'week:%d){game_id metadata}}' % (season, week))
+    d = await gql("query($yr:String!,$wk:Int){"
+                  'scores(sport:"nfl",season:$yr,season_type:"regular",'
+                  "week:$wk){game_id metadata}}", {"yr": season, "wk": week})
     teams: set[str] = set()
     for g in d.get("scores") or []:
         m = g.get("metadata") or {}
