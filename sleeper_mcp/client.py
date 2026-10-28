@@ -407,6 +407,30 @@ async def current_week() -> int:
     return int((await state()).get("week") or 1)
 
 
+async def teams_playing(week: int) -> set[str]:
+    """The NFL teams with a game in this regular-season week.
+
+    A team NOT in the set is on a BYE. The scoreboard is the schedule, so no
+    bye table is kept here and none can go stale.
+
+    AN EMPTY SET DOES NOT MEAN "NOBODY IS ON A BYE". It means the scoreboard
+    has no games — the off-season, or a week Sleeper has not published — and
+    nothing is known. A caller must say that its bye check did not run.
+
+    Do not get the full team list from the player dictionary to invert this:
+    the dictionary still carries stale teams (OAK, observed 2026-10-23).
+    """
+    season = (await state()).get("season")
+    d = await gql("query($yr:String!,$wk:Int){"
+                  'scores(sport:"nfl",season:$yr,season_type:"regular",'
+                  "week:$wk){game_id metadata}}", {"yr": season, "wk": week})
+    teams: set[str] = set()
+    for g in d.get("scores") or []:
+        m = g.get("metadata") or {}
+        teams |= {m.get("away_team"), m.get("home_team")}
+    return teams - {None, ""}
+
+
 async def starting_slots(lg: str | None = None) -> list[str]:
     """This league's starting slots, IN ORDER.
 
